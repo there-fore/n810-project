@@ -157,7 +157,72 @@ Check free space in Control Panel > Memory, or size folders in the terminal with
 
 ---
 
+## Oracle Node (`onode`)
+
+The compute side of the project. The N810 sends requests here; the node does the heavy work. Connection details are in the private notes file, not this one.
+
+| Item | State |
+|---|---|
+| OS | Ubuntu 24.04.5 LTS, arm64 (aarch64), kernel 7.0.0-1013-oracle |
+| Resources | 16 CPUs, 94 GB RAM, 139 GB disk (about 21% used), no GPU |
+| Swap | 16 GB `/swapfile`, persistent, `vm.swappiness=10` |
+| Build tools | gcc 13.3, cmake 3.28, build-essential, python3-pip, python3-venv |
+| Containers | Docker 29.1.3 with Compose 2.40.3; the `ubuntu` user is in the `docker` group |
+| Other tools | GitHub CLI 2.45.0 (not signed in), OCI CLI 3.95.0 and `oci-ai-speech-realtime` in `~/venvs/oci`, htop, unzip, zstd, tmux, jq |
+| Updates | unattended-upgrades enabled, iptables-persistent installed (no ports opened) |
+| Course repo | Copy of `mfadt/sld-fall-2026` at `~/sld-fall-2026`, taken from the laptop (onode cannot clone it anonymously) |
+
+### AI model (Ollama)
+- **Ollama 0.40.5** runs as a systemd service on `127.0.0.1:11434`. It answers only from the node itself.
+- **Model:** `gemma4:e4b` (6.6 GB), the course's recommended coding model.
+- **Coder profile:** set with `coder-node.sh apply`, verified with `verify`. Context is 65,536 tokens, one model loaded at a time, flash attention and q8 KV cache on, keep-alive `-1`. Only `gemma4:e4b` has been measured with it.
+- **Warm-up:** `coder-node.sh warm` loads the model. The setting `OLLAMA_KEEP_ALIVE=-1` does not survive a service restart, so re-run `warm` after an update restarts Ollama.
+- **OpenCode 1.19.3** is installed. Its first run is slow (about 6 minutes); later turns take a few seconds.
+
+### Commands that matter
+```bash
+ssh onode                                                  # connect from the laptop
+~/sld-fall-2026/examples/coder-tools/coder-node.sh verify  # check the profile (no sudo)
+~/sld-fall-2026/examples/coder-tools/coder-node.sh warm    # load gemma4:e4b
+ollama ps                                                  # what is loaded right now
+```
+
+### Lessons from setup
+- The course scripts were copied from a Windows clone with CRLF line endings, so Linux failed on the shebang (`bash\r`). Fix: `sed -i "s/\r$//"` on the `.sh` files. A `.gitattributes` with `*.sh text eol=lf` would prevent this on future clones.
+- Running course scripts with `sudo` may be blocked by automated permission checks. Run `apply` yourself in an SSH session.
+- Always confirm the terminal is on onode (prompt reads `ubuntu@smalldevllmnode`) before running node commands. A laptop PowerShell tab will fail `cd ~/...`.
+
+---
+
+## Course References
+
+Guides from the course repo and wiki, for when something here goes wrong. Check the wiki first for anything about SSH or the devices.
+
+### Wiki (`mfadt/sld-fall-2026/wiki`)
+| Guide | Use it for |
+|---|---|
+| [SSH Keys and Pairing](https://github.com/mfadt/sld-fall-2026/wiki/SSH-Keys-and-Pairing) | Reading SSH errors. Its "An old device" section covers the legacy-algorithm flags the N810 needs. Also the `Host` nickname pattern used above. |
+| [Nokia Devices Library](https://github.com/mfadt/sld-fall-2026/wiki/Nokia-Devices-Library) | Specs for the N810 and the other borrowed devices. The N810 is Maemo 4.1 with no cellular radio. |
+| [Copilot for Semester Projects](https://github.com/mfadt/sld-fall-2026/wiki/Copilot-for-Semester-Projects) | The working loop, device-first habits, and attribution rules (`Co-Authored-By:` trailers). |
+| [Building for Symbian S60](https://github.com/mfadt/sld-fall-2026/wiki/Building-for-Symbian-S60) | Only if the N95 or N80 becomes a target. Mostly speculative. |
+| [Building a Raspberry Pi Toolchain](https://github.com/mfadt/sld-fall-2026/wiki/Building-a-Raspberry-Pi-Toolchain) | Pi targets. Not the N810: its ARM11 is ARMv6, so check the triplet before using it. |
+
+### Docs (`mfadt/sld-fall-2026/docs`)
+| Guide | Use it for |
+|---|---|
+| [Oracle Ampere node setup](https://github.com/mfadt/sld-fall-2026/blob/main/docs/oracle-ampere-node.md) | Node setup and SSH. Chapter 5 covers first login, Chapter 6 covers the `~/.ssh/config` nickname and the weekly login rule, and Chapter 7 covers the toolchain prompt. |
+| [Coding on your node](https://github.com/mfadt/sld-fall-2026/blob/main/docs/coding-on-your-node.md) | Ollama profiles (chat vs coder), swap setup (Step 1.3), and coder tools (OpenCode, Hermes, Claude Code) on the node. |
+| [Self-hosted AI kit](https://github.com/mfadt/sld-fall-2026/blob/main/docs/self-hosted-ai-kit.md) | Ollama install, the `OLLAMA_*` settings, the chat page, and "When it goes wrong". |
+| [Self-hosted AI kit runbook](https://github.com/mfadt/sld-fall-2026/blob/main/docs/self-hosted-ai-kit-runbook.md) | Long-form Ollama runbook with benchmarks and the Docker/front-door traps. |
+| [Oracle AI services](https://github.com/mfadt/sld-fall-2026/blob/main/docs/oci-ai-services.md) | OCI CLI setup and speech/vision calls from the node. |
+| [First build on a device](https://github.com/mfadt/sld-fall-2026/blob/main/docs/first-build-on-a-device.md) | The laptop→device SSH flow, `ssh-copy-id` on Windows, and "When it goes wrong". Written for a Pi; the same pattern applies to the N810. |
+| [Installing software on a borrowed Nokia N900](https://github.com/mfadt/sld-fall-2026/blob/main/docs/nokia-n900-software-repos.md) | Maemo package repos and `apt-get`. N900 is Maemo 5, so the N810 (Diablo) catalogs differ. Read it for the method, not the URLs. |
+| [Using Antigravity](https://github.com/mfadt/sld-fall-2026/blob/main/docs/using-antigravity.md) | The course's rules for agent-assisted work: one step at a time, paste exact errors, attribute commits. |
+| [Free cloud options](https://github.com/mfadt/sld-fall-2026/blob/main/docs/free-cloud-options.md) | Alternatives if the Oracle node is unavailable. |
+
 ## Log
+**2026-10-16:** Read the course wiki and docs and added the references above. Set up `onode`: build tools, Docker, GitHub CLI, OCI CLI, 16 GB swap, course repo copy, and a reboot onto the new kernel. Ollama 0.40.5 runs as a CPU-only service. Downloaded `gemma4:e4b`, applied and verified the coder profile, and loaded the model. OpenCode installed; its first warm-up turn was started.
+
 **2026-10-09:** Mirror added; rootsh, openssh, pc-connectivity-manager, maemo-control-usb installed. N810 on hotspot Wi-Fi. Laptop ping confirmed; SSH needs the legacy host-key flag (retry pending). Cleanup: maps, games, music, themes removed.
 
 ## Next Steps
