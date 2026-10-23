@@ -37,6 +37,7 @@ The N810 normally runs as the regular user `user` (home `/home/user`), not root.
   - `n810-ask`: Python. Reads a question on stdin, calls Ollama's `/api/chat` directly (streaming, `think: false`, `keep_alive: -1`), prints plain text with Unicode punctuation swapped for ASCII. System prompt asks for short, plain-text answers for an 800x480 screen, and includes a short, correct N810 spec sheet that the model must use for N810 questions (without it, Gemma called the N810 a Series 40 smartphone with a 2.1-inch screen). No OpenCode, so replies start in seconds. The version without the spec sheet is `n810-ask.bak`.
   - `n810-agent`: shell. Reads a task on stdin and runs `opencode run -m ollama/gemma4:e4b` in `~/work` with `TERM=dumb NO_COLOR=1`. OpenCode sends about 6,700 tokens first, so it takes minutes. `~/work` holds one test file, `notes.txt`.
   - The only copies of these scripts and the N810 launchers are on the node and the N810; they are not in the repo.
+- **llamatalk** (added 2026-10-23, ubuntu user, details and measurements in `N810-setup.md`): speech recognition, Gemma 4 E2B and text-to-speech servers, built from source in `~/llamatalk`, models in `~/llamatalk-models` (4.4 GB). They listen on `127.0.0.1` only: 8091 speech recognition (Qwen3-ASR), 8092 language model (Gemma E2B), 8093 speech (Pocket TTS). Start with `~/llamatalk/start.sh`, stop with `~/llamatalk/stop.sh`. Not a systemd service: after a reboot they stay off. About 6.7 GB of RAM in use; 11.6 GB stayed free with `gemma4:e4b` also loaded. Measured: E2B answers a short question in 2.1 s (21 tok/s), speech at about 2x real time, recognition 1.3 s. Nothing on the N810 uses them yet. Ollama, the warm-up service and the n810 helpers were not changed.
 
 ## N810 state (verify)
 
@@ -62,6 +63,7 @@ The N810 normally runs as the regular user `user` (home `/home/user`), not root.
 - Use a separate legacy SSH service on port 2222 for the N810, rather than weakening port 22 for everyone.
 - Shrink the node to 4/23 to reduce cost, and grow it again if the Week 11 model needs more RAM.
 - OpenCode runs with the local model, `gemma4:e4b`, so nothing is sent to Claude or Anthropic. OpenCode is a separate tool, not Claude.
+- llamatalk goes on onode only; the N810 can't run any of it. It was built from source rather than using the prebuilt release from its one-person repo. Only the `asr e2b tts` model sets were fetched, because Ollama already has E4B. Its servers stay on `127.0.0.1` and are reached through `onode2`, so no new ports were opened.
 
 ## Lessons learned
 
@@ -76,12 +78,15 @@ The N810 normally runs as the regular user `user` (home `/home/user`), not root.
 - **A small model invents niche facts.** Put the facts it needs in the system prompt.
 - **Don't type a lone apostrophe on the N810.** Its shell treats `what's` as an open quote. Write `what is`, or wrap the question in double quotes.
 - **Ubuntu's automatic updates can restart Ollama** (via needrestart), which unloads the model. The warm-up service and needrestart rule cover this.
+- **Ollama and llamatalk share 4 cores.** Both can stay loaded (memory is fine), but whichever is working slows the other. Stop llamatalk before an `ask` demo unless you're showing speech.
+- **Gemma E2B is fast but gets facts wrong** (it called the N810 a smartphone). Give it the spec sheet, as `n810-ask` does for E4B.
+- **The speech recognizer adds a prefix**, `language English<asr_text>`, before the text it heard. Strip it.
 - **Course dossiers** (`mfadt/sld-fall-2026/dossiers`) hold the measured advice on Ollama, OpenCode and the node. `dossiers-index.md` in this repo says where to look.
 
 ## Demo plan
 
 1. Show the N810 as the interface and the node as the computer.
-2. `ask what is a Nokia N810?` (about 30 s). Check `ollama ps` on the node first; the warm-up service should already have the model loaded.
+2. `ask what is a Nokia N810?` (about 30 s). Check `ollama ps` on the node first; the warm-up service should already have the model loaded. Run `~/llamatalk/stop.sh` first unless the demo uses speech.
 3. `ask draw an ASCII-art Nokia N810 with its specs underneath` (the visual, about 35 s). The spec list is correct; the drawing itself is a rough blob.
 4. Optional: `agent show me the files in this folder` (about 8 minutes; start it before talking about it, or skip).
 
@@ -95,12 +100,15 @@ The N810 normally runs as the regular user `user` (home `/home/user`), not root.
 6. Delete the monthly budget alert after 2026-12-20.
 7. Keep `N810-private.md` out of git (it is git-ignored).
 8. Optional: an ASCII status screen script on the node for live numbers in the demo.
+9. Decide whether a fast `ask` should use Gemma E2B on port 8092 (about 2 s) instead of `gemma4:e4b` (26–36 s). It needs the spec sheet.
+10. Speech on the N810: find a way to record audio (the GStreamer mic plugin `dsppcm` is there, but `gst-launch`, `arecord` and `esdrec` are missing; `play-sound` exists for playback). Then a `talk` launcher: record a WAV, send it through `onode2`, play the spoken reply. Shrink replies to 8 kHz on the node first (about 47 KB per second of speech at 24 kHz).
 
 ## Files
 
 - `N810-setup.md` (public notes, in repo): setup log, Oracle node section, references.
 - `N810-private.md` (local only, git-ignored): IPs, budget, account and security details.
 - `onode-legacy-setup.sh` (in repo): the script that set up port 2222 on the node. Already run once successfully.
+- llamatalk's `start.sh`, `stop.sh` and the test script (`~/llamatalk/test/smoke.sh`) exist only on the node, not in the repo.
 - `dossiers-index.md` (PR there-fore/n810-project#3): index of the course dossiers, with what each file answers and where.
 - Class repo: `mfadt/sld-fall-2026` (private). Useful guides: `docs/oracle-ampere-node.md`, `docs/coding-on-your-node.md`, `docs/first-build-on-a-device.md`. Your login has access.
 - Class wiki: `mfadt/sld-fall-2026` wiki. The N810 devices are on the "Nokia Devices Library" page.
