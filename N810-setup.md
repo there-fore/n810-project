@@ -177,7 +177,7 @@ The compute side of the project. The N810 sends requests here; the node does the
 | Item | State |
 |---|---|
 | OS | Ubuntu 24.04.5 LTS, arm64 (aarch64), kernel 7.0.0-1013-oracle |
-| Resources | 4 CPUs, 23 GB RAM, 140 GB disk (about 22% used), no GPU. Resized from 16 CPUs / 96 GB on 2026-10-16 to cut cost; the figures below for speed were measured on the larger size. |
+| Resources | 4 CPUs, 23 GB RAM, 140 GB disk (about 26% used on 2026-10-23), no GPU. Resized from 16 CPUs / 96 GB on 2026-10-16 to cut cost; the figures below for speed were measured on the larger size. |
 | Swap | 16 GB `/swapfile`, persistent, `vm.swappiness=10` |
 | Build tools | gcc 13.3, cmake 3.28, build-essential, python3-pip, python3-venv |
 | Containers | Docker 29.1.3 with Compose 2.40.3; the `ubuntu` user is in the `docker` group |
@@ -192,12 +192,42 @@ The compute side of the project. The N810 sends requests here; the node does the
 - **Warm-up:** `coder-node.sh warm` loads the model. The setting `OLLAMA_KEEP_ALIVE=-1` does not survive a service restart, so re-run `warm` after an update restarts Ollama.
 - **OpenCode 1.19.3** is installed. Its first run is slow (about 6 minutes); later turns take a few seconds.
 
+### Speech and a fast model (llamatalk)
+[llamatalk](https://github.com/mercurious/llamatalk) is a small kit built for retro handhelds: llama.cpp's `llama-server` and Pocket TTS's `tts-server`, plus a model downloader. It runs on onode only. It cannot run on the N810 (ARMv6, 128 MB RAM, no `curl`; the smallest model is 1 GB). Its value here is speech in and out, which Ollama lacks, and the faster Gemma E2B model.
+
+- **Built from source** on 2026-10-23 with Docker (`ENGINE=docker build/build.sh`, about 5 minutes) instead of using the prebuilt release. llamatalk 0.1.0 (commit `759b3a9`), llama.cpp `6c7a87f` (CPU only), pockettts.cpp `e621509`. The programs are in `~/llamatalk/dist/llamatalk/bin/`. The build leaves a 700 MB Docker image (`llamatalk-build`) and 389 MB of sources in `~/llamatalk/build/work`. One harmless build warning: the checksum for llama-server's web chat page failed to download; the API is unaffected.
+- **Models** (4.4 GB, `~/llamatalk-models`, fetched with `models.sh fetch --dir ~/llamatalk-models asr e2b tts`): Qwen3-ASR 0.6B for speech recognition, Gemma 4 E2B (QAT Q4_0) as the language model, Pocket TTS English and its voices. The `e4b` set was skipped because Ollama already has that model. Licences: Gemma Apache-2.0; Pocket TTS CC-BY-4.0 (credit it if its speech is shown or published); Qwen3-ASR not stated on the download page.
+- **Servers**, all on `127.0.0.1` only (reach them from the N810 through `onode2`; no new ports):
+
+  | Port | Server | API | Memory |
+  |---|---|---|---|
+  | 8091 | speech recognition (Qwen3-ASR) | `/v1/audio/transcriptions` (WAV, 16 kHz) | 1.9 GB |
+  | 8092 | language model (Gemma E2B, 8k context) | `/v1/chat/completions` | 4.6 GB |
+  | 8093 | speech (Pocket TTS, voice `alba`) | `/v1/audio/speech` (WAV, 24 kHz) | 0.1 GB |
+
+- **Start and stop** with `~/llamatalk/start.sh` and `~/llamatalk/stop.sh`. Logs are in `~/llamatalk/logs/`. They are not a systemd service, so they don't come back after a reboot. With Ollama's `gemma4:e4b` also loaded, 11.6 GB of RAM stayed free.
+- **They share the 4 cores with Ollama.** Idle servers cost almost nothing, but `ask` slows down while llamatalk is working. Stop llamatalk before an `ask` demo unless you're showing speech.
+
+**Measured on 2026-10-23** (4 OCPU, Ollama loaded but idle; script and results in `~/llamatalk/test/`):
+
+| Test | Result |
+|---|---|
+| Language model, short question | 2.1 s total; prompt 71 tok/s, generation 21 tok/s. Compare `ask` on `gemma4:e4b`: 26–36 s. |
+| Speech, one sentence | 4.8 s of audio made in 2.3 s (about 2x real time). 24 kHz mono 16-bit WAV, 225 KB. |
+| Speech recognition, that WAV resampled to 16 kHz | 1.3 s. One word wrong: "N810" heard as "8880". |
+
+- **Gemma E2B gets facts wrong.** Asked what an N810 is, it called it "a smartphone… at a competitive price point". Give it the same spec sheet as `n810-ask` if it answers N810 questions.
+- **The recognizer's output starts with `language English<asr_text>`.** A client must strip that prefix before using the text.
+- **Reply audio is large for the hotspot** (about 47 KB per second of speech). Converting it to 8 kHz on the node before sending would make it a third of the size.
+
 ### Commands that matter
 ```bash
 ssh onode                                                  # connect from the laptop
 ~/sld-fall-2026/examples/coder-tools/coder-node.sh verify  # check the profile (no sudo)
 ~/sld-fall-2026/examples/coder-tools/coder-node.sh warm    # load gemma4:e4b
 ollama ps                                                  # what is loaded right now
+~/llamatalk/start.sh                                       # start the speech and E2B servers
+~/llamatalk/stop.sh                                        # stop them (do this before an ask demo)
 ```
 
 ### Lessons from setup
@@ -244,6 +274,8 @@ Guides from the course repo and wiki, for when something here goes wrong. Check 
 
 **2026-10-21:** `ssh onode2` confirmed as `user` (from the laptop and in X Terminal). `ask` reworked to call Ollama directly through `n810-ask`; new `agent` launcher for OpenCode tasks through `n810-agent`. `gemma4:e4b` loaded and pinned, with a warm-up service that reloads it whenever Ollama starts. `ask` answers in 26–36 s; an `agent` file listing took 491 s. Found the N810's clock is wrong.
 
+**2026-10-23:** Assessed llamatalk: onode only, nothing for the N810. Built it from source on onode, downloaded the `asr e2b tts` models (4.4 GB), and started its three servers on `127.0.0.1:8091–8093`. Gemma E2B answered in 2.1 s, speech was made at about 2x real time, and speech recognition took 1.3 s. Ollama and `gemma4:e4b` were left as they were.
+
 ## Next Steps
 1. Try `ask` by hand in X Terminal; check the text fits the 800x480 screen.
 2. Decide whether `agent` (491 s per task) goes in the demo.
@@ -251,3 +283,5 @@ Guides from the course repo and wiki, for when something here goes wrong. Check 
 4. Set the N810's clock.
 5. Disable root password login on the N810 (`PasswordAuthentication no`) before using shared networks.
 6. Finish cleanup (`WMPInfo.xml`, `Video`, `Downloads`, `.apt-archive-cache`); recheck free space.
+7. Decide whether a fast `ask` should use Gemma E2B (port 8092, about 2 s) instead of `gemma4:e4b` (26–36 s). It needs the spec sheet in its system prompt.
+8. Find a way to record audio on the N810. The GStreamer mic plugin (`dsppcm`) is there, but `gst-launch`, `arecord` and `esdrec` are missing. Playback exists (`play-sound`).
