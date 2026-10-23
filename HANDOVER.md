@@ -111,6 +111,7 @@ The N810 normally runs as the regular user `user` (home `/home/user`), not root.
 - `N810-setup.md` (in repo): device profile, then the three setup stages with status, what's left and lessons; course references; dated log.
 - `PROJECT.md` (in repo): the Environmental Vibe DJ concept, Big Questions, sensor inputs and build phases.
 - `N810-private.md` (local only, git-ignored): IPs, budget, account and security details.
+- Rose's archived notes, `claude/N810 Capabilities and Bottlenecks 2026-10-23.md` in Claude (not in the repo): older detail that wasn't carried over (package versions, the full connection log, the USB diagnostic ladder, N900 class-guide notes). Frozen as of 2026-10-21; ask Rose for it if a detail isn't in the repo.
 - `onode-legacy-setup.sh` (in repo): the script that set up port 2222 on the node. Already run once successfully.
 - llamatalk's `start.sh`, `stop.sh` and the test script (`~/llamatalk/test/smoke.sh`) exist only on the node, not in the repo.
 - `dossiers-index.md` (in repo): index of the course dossiers, with what each file answers and where.
