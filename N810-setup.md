@@ -12,6 +12,9 @@ Machine-specific details are kept out of this public file. Placeholders such as 
 | N810's current IP | `/sbin/ifconfig wlan0`, read `inet addr:` |
 | SSH from laptop | `ssh -o HostKeyAlgorithms=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group14-sha1 root@<N810-IP>` |
 | SSH after key setup | `ssh n810` |
+| N810 → node | `ssh onode2` (on the N810) |
+| Ask the model (on the N810) | `ask <question>`: plain text, fast |
+| File or coding task (on the N810) | `agent <task>`: OpenCode on the node, takes minutes |
 | Package catalog | `http://maemo.viniciuspaes.com/extras/`, distribution `diablo`, components `free non-free` |
 | Terminal app | Menu > Utilities > X Terminal |
 
@@ -43,7 +46,8 @@ Machine-specific details are kept out of this public file. Placeholders such as 
 | Shell | BusyBox v1.6.1 (ash). No wget or curl. Network tools are in `/sbin`; call them by full path. |
 | SSH | OpenSSH 4.7p1 (2008). RSA and DSA only; no ed25519. Modern clients need legacy flags. |
 | Browser | MicroB. Most modern HTTPS sites fail. |
-| User | Normal user (uid 29999); root via rootsh. |
+| User | Normal user (uid 29999); root via rootsh. Each has its own `~/.ssh`. |
+| Clock | Wrong on this unit (October files show August dates). Don't trust file times. |
 
 ### Installed for this project
 | Package | Size | Purpose |
@@ -70,7 +74,7 @@ Every connection needs three layers: a **link** (radio or cable), **addressing**
 2. In Application manager > Application catalogs, disable the dead maemo.org and Nokia catalogs and add the mirror from the Quick Reference. The web address must include `/extras/`, and the distribution must be `diablo`.
 3. Install rootsh, then openssh. Set the root password during install.
 
-### Laptop → N810 (status: link and server confirmed)
+### Laptop → N810 (status: key login working)
 - **Ping:** 0% loss, average 229 ms. The hotspot lets clients reach each other.
 - **First SSH attempt** failed with `no matching host key type found. Their offer: ssh-rsa,ssh-dss`. Modern SSH disables `ssh-rsa`. Use the Quick Reference command, type `yes` at the fingerprint prompt, then enter the password. If a new "no matching…" error appears, it names the next algorithm to add.
 
@@ -91,17 +95,26 @@ Every connection needs three layers: a **link** (radio or cable), **addressing**
 
 An assistant's shell reaches only the networks its machine is on. Run it on the laptop, not in the cloud.
 
-### N810 → Oracle node (status: not started)
-The node accepts ed25519 keys only, which OpenSSH 4.7 can't use.
-1. On the N810: `ssh-keygen -t rsa -b 2048`.
-2. Add the N810's public key to the node's `~/.ssh/authorized_keys`.
-3. On the node, allow SHA-1 RSA in `/etc/ssh/sshd_config`, scoped to the N810 if possible, then restart SSH:
+### N810 → Oracle node (status: working on port 2222)
+The node's main SSH (port 22, user `ubuntu`) stays as it is, because OpenSSH 4.7 can't use its default algorithms. A separate legacy SSH service runs on **port 2222**, and only the `n810` user can log in there, with a key.
+
+1. On the N810: an RSA key was made for this link (`/root/.ssh/id_rsa_onode`, no passphrase), with a copy in `/home/user/.ssh/` for the normal terminal user. Its public key is in the node's `/home/n810/.ssh/authorized_keys`.
+2. The N810 has a short entry in `/root/.ssh/config` and `/home/user/.ssh/config`, so the login is:
    ```
-   HostKeyAlgorithms +ssh-rsa
-   PubkeyAcceptedAlgorithms +ssh-rsa
+   ssh onode2
    ```
-   This weakens the node slightly. Untested.
-4. From the N810: `ssh ubuntu@<node-ip>`.
+   (The full form, if the entry is missing: `ssh -p 2222 -i /root/.ssh/id_rsa_onode n810@<node-ip>`.)
+3. The node runs the legacy service as `ssh-legacy.service` with its own config in `/etc/ssh/sshd_config.legacy`. It has no effect on port 22.
+4. OpenCode runs as the `n810` user: `/usr/local/bin/opencode`.
+
+Test from the N810: `ssh onode2 hostname` should print `smalldevllmnode`. Confirmed as `user` in X Terminal on 2026-10-21 (about 3.6 s including the handshake).
+
+**Launchers on the N810** (scripts in `/home/user`, linked in `/usr/bin`, so they work from any folder):
+| Command | Runs on the node | Speed |
+|---|---|---|
+| `ask <question>` | `/usr/local/bin/n810-ask`: calls Ollama directly, plain text, Unicode punctuation swapped for ASCII | 26–36 s per answer (tested as `user` over SSH from the laptop) |
+| `agent <task>` | `/usr/local/bin/n810-agent`: `opencode run` in `~/work` with `TERM=dumb` | Minutes (491 s for a file listing on 4 CPUs) |
+| `oc` | OpenCode full-screen | Garbled on osso-xterm (`66;`, `w=1`). Not for the demo. |
 
 ### Other routes
 | Route | Status | When to use |
@@ -164,7 +177,7 @@ The compute side of the project. The N810 sends requests here; the node does the
 | Item | State |
 |---|---|
 | OS | Ubuntu 24.04.5 LTS, arm64 (aarch64), kernel 7.0.0-1013-oracle |
-| Resources | 16 CPUs, 94 GB RAM, 139 GB disk (about 21% used), no GPU |
+| Resources | 4 CPUs, 23 GB RAM, 140 GB disk (about 22% used), no GPU. Resized from 16 CPUs / 96 GB on 2026-10-16 to cut cost; the figures below for speed were measured on the larger size. |
 | Swap | 16 GB `/swapfile`, persistent, `vm.swappiness=10` |
 | Build tools | gcc 13.3, cmake 3.28, build-essential, python3-pip, python3-venv |
 | Containers | Docker 29.1.3 with Compose 2.40.3; the `ubuntu` user is in the `docker` group |
@@ -225,9 +238,16 @@ Guides from the course repo and wiki, for when something here goes wrong. Check 
 
 **2026-10-09:** Mirror added; rootsh, openssh, pc-connectivity-manager, maemo-control-usb installed. N810 on hotspot Wi-Fi. Laptop ping confirmed; SSH needs the legacy host-key flag (retry pending). Cleanup: maps, games, music, themes removed.
 
+**2026-10-16:** Oracle node resized to 4 OCPU / 23 GB to reduce usage; running and reachable over SSH. Monthly budget alert set.
+
+**2026-10-16 (later):** Key login laptop → N810 working (`ssh n810`). N810 connected to onode on port 2222 as the `n810` user (`ssh onode2`). OpenCode copied to `/usr/local/bin`, and its first-run setup started for `n810`.
+
+**2026-10-21:** `ssh onode2` confirmed as `user` (from the laptop and in X Terminal). `ask` reworked to call Ollama directly through `n810-ask`; new `agent` launcher for OpenCode tasks through `n810-agent`. `gemma4:e4b` loaded and pinned, with a warm-up service that reloads it whenever Ollama starts. `ask` answers in 26–36 s; an `agent` file listing took 491 s. Found the N810's clock is wrong.
+
 ## Next Steps
-1. Retry SSH from the laptop with the legacy flags.
-2. Set up key login from a local assistant session on the laptop.
-3. Finish cleanup (`WMPInfo.xml`, `Video`, `Downloads`, `.apt-archive-cache`); recheck free space.
-4. Connect the N810 to the Oracle node.
-5. Measure round trip to the node; decide what to offload.
+1. Try `ask` by hand in X Terminal; check the text fits the 800x480 screen.
+2. Decide whether `agent` (491 s per task) goes in the demo.
+3. Measure round trip and handshake time N810 → node; decide what to offload.
+4. Set the N810's clock.
+5. Disable root password login on the N810 (`PasswordAuthentication no`) before using shared networks.
+6. Finish cleanup (`WMPInfo.xml`, `Video`, `Downloads`, `.apt-archive-cache`); recheck free space.
