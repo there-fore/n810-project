@@ -11,6 +11,7 @@ The work happened in three stages: **clean the device**, **secure the connection
 | [PROJECT.md](PROJECT.md) | The art project: concept, Big Questions, build phases |
 | [HANDOVER.md](HANDOVER.md) | Current status for a new assistant session |
 | `N810-private.md` (git-ignored) | IP addresses, billing, account details |
+| *N810 Capabilities and Bottlenecks 2026-10-23.md* (Rose's archived notes in Claude, `claude/`, not in the repo) | Older detail not carried over: package versions, the full 2026-10-09 to 10-16 connection log, wlan0 packet counts, the internal card listing, USB diagnostic ladder, N900 class-guide notes. Frozen as of 2026-10-21; this repo is current. |
 
 Machine-specific details are kept out of this public file. Placeholders such as `<N810-IP>` mark where they go.
 
