@@ -101,6 +101,7 @@ The N810 normally runs as the regular user `user` (home `/home/user`), not root.
 - `N810-setup.md` (public notes, in repo): setup log, Oracle node section, references.
 - `N810-private.md` (local only, git-ignored): IPs, budget, account and security details.
 - `onode-legacy-setup.sh` (in repo): the script that set up port 2222 on the node. Already run once successfully.
+- `dossiers-index.md` (PR there-fore/n810-project#3): index of the course dossiers, with what each file answers and where.
 - Class repo: `mfadt/sld-fall-2026` (private). Useful guides: `docs/oracle-ampere-node.md`, `docs/coding-on-your-node.md`, `docs/first-build-on-a-device.md`. Your login has access.
 - Class wiki: `mfadt/sld-fall-2026` wiki. The N810 devices are on the "Nokia Devices Library" page.
 
