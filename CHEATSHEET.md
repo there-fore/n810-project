@@ -1,0 +1,99 @@
+# N810 Cheat Sheet
+
+What to type, where, and what's installed. Current state only; the history is in [N810-setup.md](N810-setup.md). Last checked 2026-10-23.
+
+**First check which machine you're on.** Each short name only exists on one machine: `n810` on the laptop, `onode2` on the N810. Typed on the wrong one, it fails with `Name or service not known` or `Could not resolve hostname`.
+
+## On the N810 (X Terminal, as `user`)
+
+Open X Terminal from Menu > Utilities > X Terminal.
+
+| Type | What it does | Time |
+|---|---|---|
+| `ask <question>` | Plain-text answer from `gemma4:e4b` on the node | 26–36 s |
+| `agent <task>` | OpenCode file or coding task on the node, in `~/work` | Minutes (491 s for one task) |
+| `oc` | OpenCode full-screen. Prints garbage (`66;`, `w=1`); don't use | — |
+| `ssh onode2` | Log in to the node as `n810` | ~3.6 s |
+| `/sbin/ifconfig wlan0` | Current IP (read `inet addr:`) | — |
+| `sudo gainroot` | Root shell | — |
+| `du -sk /media/mmc2/*` | Folder sizes on the internal card, in KB | — |
+
+Examples: `ask what is a Nokia N810?` · `agent show me the files in this folder`
+
+### Typing on the N810
+- **Symbols** (`|`, `<`, `>`): blue Fn key plus the printed symbol, or the on-screen keyboard.
+- **The bar at the bottom of X Terminal** has Tab, Esc, PgUp, PgDn and Ctrl.
+- **No lone apostrophes.** `what's` opens a quote the shell waits to close. Write `what is`, or put the whole question in double quotes.
+- **Put spaces between parts:** `ls -la /media/mmc2`, not `ls -la/media/mmc2`.
+- **Long output scrolls away.** Add `| more` (Space for the next page, q to quit).
+- **Network tools are in `/sbin`.** Type the full path, as in `/sbin/ifconfig`.
+- **The keyboard is slow.** Use the short commands above, not full ones.
+
+### Screen (800x480, X Terminal)
+- Plain text only, printed line by line. Full-screen programs that ask the terminal about itself (OpenCode, other modern text interfaces) print garbage.
+- `ask` replies are kept short, with no markdown or tables, and Unicode punctuation is swapped for ASCII on the node.
+- Not measured yet: how many columns and rows X Terminal shows, and whether `ask` replies fit without scrolling.
+
+## On the laptop (PowerShell)
+
+| Type | What it does |
+|---|---|
+| `ssh n810 <command>` | Run one command on the N810 as root, e.g. `ssh n810 uname -a` |
+| `ssh n810` | Log in to the N810 as root |
+| `ssh -o BatchMode=yes n810 uname -a` | Check that key login works (fails instead of asking for a password) |
+| `ssh onode` | Log in to the node as `ubuntu` |
+| `cmd /c "ssh onode2 bash -s < file.sh"` | Run a script on the node without PowerShell adding `\r` to every line |
+
+If the hotspot gives the N810 a new address, change only the `HostName` line of `n810` in `~/.ssh/config`.
+
+## On the node (`ssh onode`)
+
+| Type | What it does |
+|---|---|
+| `ollama ps` | Is `gemma4:e4b` loaded? (should say `UNTIL Forever`) |
+| `~/llamatalk/start.sh` | Start the speech and Gemma E2B servers |
+| `~/llamatalk/stop.sh` | Stop them. Do this before an `ask` demo unless you're showing speech. |
+| `~/sld-fall-2026/examples/coder-tools/coder-node.sh verify` | Check the Ollama coder profile |
+| `~/sld-fall-2026/examples/coder-tools/coder-node.sh warm` | Load `gemma4:e4b` by hand |
+
+The prompt should read `ubuntu@smalldevllmnode`. If it doesn't, you're still on the laptop.
+
+## What's installed
+
+### N810
+| Name | Kind | Purpose |
+|---|---|---|
+| rootsh | package | Root shell (`sudo gainroot`) |
+| openssh (client, server) | package | SSH in from the laptop and out to the node; sftp, scp |
+| pc-connectivity-manager, maemo-control-usb | package | USB networking setup (not in use yet) |
+| `ask`, `agent`, `oc` | script in `/home/user`, linked in `/usr/bin` | Launchers above |
+| `id_rsa_onode`, `onode2` config | key and config, in both `/root/.ssh` and `/home/user/.ssh` | Login to the node |
+
+Package catalog: `http://maemo.viniciuspaes.com/extras/`, distribution `diablo`, components `free non-free`.
+
+### Node
+| Name | Where | Purpose |
+|---|---|---|
+| Ollama 0.40.5 + `gemma4:e4b` | systemd service | The model behind `ask` and `agent` |
+| `ollama-warmup.service` | systemd | Reloads `gemma4:e4b` whenever Ollama starts |
+| OpenCode 1.19.3 | `/usr/local/bin/opencode` | Agent behind `agent` |
+| `n810-ask`, `n810-agent` | `/usr/local/bin` | Node side of `ask` and `agent` |
+| `ssh-legacy.service` | systemd | SSH for the N810 only (port 2222, user `n810`) |
+| llamatalk | `~/llamatalk` (ubuntu user), started by hand | Speech recognition, Gemma E2B, speech |
+
+### Node services and ports
+| Port | Service | Reachable from |
+|---|---|---|
+| 22 | Main SSH (`ubuntu`) | Laptop |
+| 2222 | Legacy SSH (`n810` only, key only) | N810 (open to the internet) |
+| 11434 | Ollama | Node only |
+| 8091 | llamatalk speech recognition (Qwen3-ASR) | Node only |
+| 8092 | llamatalk language model (Gemma E2B) | Node only |
+| 8093 | llamatalk speech (Pocket TTS) | Node only |
+
+Services that are "node only" are reached from the N810 by going through `onode2`.
+
+## Before a demo
+1. On the node: `ollama ps` shows `gemma4:e4b` loaded.
+2. On the node: `~/llamatalk/stop.sh`, unless the demo uses speech.
+3. On the N810: on the phone hotspot; `ask` with a short question as a warm-up.

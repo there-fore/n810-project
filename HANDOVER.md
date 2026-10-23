@@ -4,6 +4,8 @@ Paste this into a new Claude chat to continue. Connections, launchers, the node'
 
 **Private details** (IP addresses, billing, budget alert, account type) live only in `N810-private.md` (git-ignored). This file is in the public repo; keep them out of it.
 
+**Where things are:** commands, launchers and ports in `CHEATSHEET.md`; how each setup stage was done (clean the device, secure the connections, build on the node) in `N810-setup.md`; the art project in `PROJECT.md`. Update the cheat sheet whenever a command, launcher or service changes.
+
 ## Goal
 
 Rose Chan (PSAM 5600 B, Small Linux Devices / Large Language Models, Fall 2026, instructor David Carroll) is building a project on a Nokia N810 (Maemo 4 "Diablo", 2008). The N810 is the interface. Heavy AI work runs on a free Oracle cloud node ("onode"), using a local open-source model (Gemma 4 e4b via Ollama) and the OpenCode coding tool. Final demo: show AI working on the N810's 800x480 screen.
@@ -105,11 +107,13 @@ The N810 normally runs as the regular user `user` (home `/home/user`), not root.
 
 ## Files
 
-- `N810-setup.md` (public notes, in repo): setup log, Oracle node section, references.
+- `CHEATSHEET.md` (in repo): what to type on each machine, launchers, installed software, node services and ports, demo checklist.
+- `N810-setup.md` (in repo): device profile, then the three setup stages with status, what's left and lessons; course references; dated log.
+- `PROJECT.md` (in repo): the Environmental Vibe DJ concept, Big Questions, sensor inputs and build phases.
 - `N810-private.md` (local only, git-ignored): IPs, budget, account and security details.
 - `onode-legacy-setup.sh` (in repo): the script that set up port 2222 on the node. Already run once successfully.
 - llamatalk's `start.sh`, `stop.sh` and the test script (`~/llamatalk/test/smoke.sh`) exist only on the node, not in the repo.
-- `dossiers-index.md` (PR there-fore/n810-project#3): index of the course dossiers, with what each file answers and where.
+- `dossiers-index.md` (in repo): index of the course dossiers, with what each file answers and where.
 - Class repo: `mfadt/sld-fall-2026` (private). Useful guides: `docs/oracle-ampere-node.md`, `docs/coding-on-your-node.md`, `docs/first-build-on-a-device.md`. Your login has access.
 - Class wiki: `mfadt/sld-fall-2026` wiki. The N810 devices are on the "Nokia Devices Library" page.
 
