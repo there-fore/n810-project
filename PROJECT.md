@@ -57,7 +57,7 @@ Technical progress doesn't settle these; check each build decision against them.
 | Webcam | Overall motion (frame differencing) | Still room vs. dancing room (not gesture recognition) |
 | GPS | Location, slowly | Music changes as you walk (sonic map) |
 | Wi-Fi scan | Number and strength of nearby networks | Invisible radio environment made audible |
-| Touchscreen + stylus | X–Y position, maybe pressure | Kaoss-pad style control |
+| Touchscreen + stylus | X–Y position and pressure | Kaoss-pad style control |
 | Keyboard slide | Open/closed event | Big switch: drop, breakdown, scene change |
 | Keyboard | Typed prompts | Plain-language direction for the LLM ("rainy, slower, minor key") |
 
@@ -71,7 +71,7 @@ Principle: build the dumbest complete loop first, then make each part smarter, s
 
 **Phase 0: Foundation.** Done: the three setup stages in [N810-setup.md](N810-setup.md) (clean device, secure connections, node services for the N810). Still to decide: the sound engine runs on the laptop first, and moves to the node only if needed. Optional: USB networking as a Wi-Fi-independent link.
 
-**Phase 1: Each sensor becomes a number.**
+**Phase 1: Each sensor becomes a number.** Started 2026-10-25: light, touch, keyboard slide and mic are measured in [probes/SENSORS.md](probes/SENSORS.md). Wi-Fi scan, GPS and webcam remain.
 - Research where Diablo exposes each sensor (Maemo wiki "N810 light meter" page; Maemo location service for GPS; Wi-Fi scan tools may need root).
 - Explore, easiest first: light sensor, keyboard slide, Wi-Fi scan, touchscreen (pressure?), mic loudness, GPS, webcam motion.
 - Test: log each about once per second for a few minutes; record range, rate of change, CPU cost.
@@ -110,16 +110,16 @@ Principle: build the dumbest complete loop first, then make each part smarter, s
 
 **Phase 7: The face of the instrument.**
 - Build a terminal display of current sensor values and the active pattern. Plain line-by-line output only (full-screen interfaces garble on X Terminal).
-- Research later: a graphical interface (GTK, or Python for Maemo if it's on the Diablo mirror).
+- Research later: a graphical interface. Python 2.5 + pygame and GTK are both on the device since 2026-10-25, but this conflicts with the ambient direction, so keep it minimal.
 
 **Phase 8: Performance testing.** Battery life, behavior when Wi-Fi drops, a full 20-minute set in a real room.
 
 ## Open research questions
 
-- Sensor access paths on Diablo (light sensor, keyboard slide, Wi-Fi scan, GPS).
-- Does the touchscreen report pressure?
+- Sensor access paths on Diablo: light sensor and keyboard slide **found** (2026-10-25, [probes/SENSORS.md](probes/SENSORS.md)); Wi-Fi scan and GPS still open.
+- Does the touchscreen report pressure? **Yes**, alongside X/Y (direction unconfirmed: a firmer press may read lower).
 - Is `nc` available in BusyBox 1.6.1?
 - Does Wi-Fi scanning disrupt the active connection?
 - Which stream formats does the N810 play; is A2DP available for Diablo?
-- How to record audio on the N810 (the GStreamer mic plugin `dsppcm` is there, but `gst-launch`, `arecord` and `esdrec` are missing).
-- Can the OMAP 2420's DSP be used for on-device audio?
+- How to record audio on the N810: **solved** with `gst-launch-0.10 dsppcmsrc` (8 kHz mono only).
+- Can the OMAP 2420's DSP be used for on-device audio? Partly: the mic goes through the DSP, and recording costs about 4% of the ARM CPU.

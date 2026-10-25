@@ -34,6 +34,20 @@ Examples: `ask what is a Nokia N810?` · `agent show me the files in this folder
 - `ask` replies are kept short, with no markdown or tables, and Unicode punctuation is swapped for ASCII on the node.
 - Not measured yet: how many columns and rows X Terminal shows, and whether `ask` replies fit without scrolling.
 
+## Sensors at a glance (for design)
+
+Measured 2026-10-25 in one dim room. Paths, raw numbers and probe scripts: [probes/SENSORS.md](probes/SENSORS.md).
+
+| Sensor | Gives | Speed | Good for | Watch out |
+|---|---|---|---|---|
+| Touch | X/Y (and pressure) | ~50 updates/s while moving | Poke, pet, hold (tell apart by timing and movement) | Press firmly; light touches drop out. A still finger sends nothing. Targets about 60–80 px. |
+| Light | 0 (covered) to ~90 lux indoors | New value every ~0.4 s | Sleep/wake, "lights off" | Covering takes ~0.8 s to reach 0. Tilting the device changes it too. |
+| Keyboard slide | open / closed | Instant | Big one-off event ("open a door") | Opening also tilts the device, so light jumps too. |
+| Mic | Loudness (8 kHz mono) | 100 ms slices | Clap = startle (sharp spike); voice = attention (longer hump) | Takes ~1 s to start: keep it running. Compare with the room's usual level, not a fixed number. |
+| Lock switch, headphone jack | on / off | — | Possible extra events | Not verified yet |
+
+Everything above reacts on the device in under ~200 ms. Only narration and speech recognition go to the node (seconds). Not available: accelerometer, gyroscope. Not probed yet: webcam, Wi-Fi, GPS.
+
 ## On the laptop (PowerShell)
 
 | Type | What it does |
