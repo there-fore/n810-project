@@ -50,7 +50,8 @@ The N810 normally runs as the regular user `user` (home `/home/user`), not root.
   - `ask <question>`: pipes the question to `n810-ask` on the node. Plain text, fast. Tested 2026-10-21 as `user` over SSH from the laptop: 26–36 s per answer with the spec sheet, facts correct. The older OpenCode-based `ask` is kept as `/home/user/ask.opencode.bak`.
   - `agent <task>`: pipes the task to `n810-agent` on the node (OpenCode with tools and files, in `~/work`). Tested 2026-10-21: `agent show me the files in this folder` ran `ls` and answered correctly, but took 491 s.
   - `oc`: opens OpenCode in full-screen mode on the node. **It shows garbled text** (`66;`, `w=1`) on the N810 terminal. Not usable as the demo screen.
-- **The N810's clock is wrong** (files made in October show August dates). On 2026-10-25 it read August 1970, which broke apt's key checks; it was set from the laptop with `date -u`. There is no `hwclock`, so check it after any reboot.
+- **The N810's clock is wrong** (files made in October show August dates). On 2026-10-25 it read August 1970, which broke apt's key checks; it was set from the laptop with `date -u`. There is no `hwclock`, and a reboot resets it to 1970 (confirmed); set it after every boot (command in `CHEATSHEET.md`).
+- **Direct link tried 2026-10-25:** USB networking parked (no data link with the original cable; OS2008's `g_ether` also fails with Windows, bug 3243). Bluetooth pairs but has no PAN. Details in `N810-setup.md`, Other routes. The Windows Mobile Hotspot is next.
 - **Added 2026-10-25:** Python 2.5.2, pygame 1.7.1 and `gst-launch-0.10`. The mic records (8 kHz mono via `dsppcmsrc`), which solves the recording half of open task 10. Sensor paths and measurements for touch, light, slide and mic are in `probes/SENSORS.md`.
 - The N810 is not tied to the laptop's Wi-Fi. It needs the phone hotspot (`rose`) to reach the internet and onode.
 

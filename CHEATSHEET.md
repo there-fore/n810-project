@@ -87,7 +87,8 @@ The prompt should read `ubuntu@smalldevllmnode`. If it doesn't, you're still on 
 
 Package catalog: `http://maemo.viniciuspaes.com/extras/`, distribution `diablo`, components `free non-free`. The mirror is unsigned, so command-line installs need `apt-get install --allow-unauthenticated <package>`. Sensor paths and measurements: [probes/SENSORS.md](probes/SENSORS.md).
 
-**Clock:** the N810 read 1970 on 2026-10-25 and has no `hwclock`, so a set time probably won't survive a reboot (not yet checked). Set it from the laptop before installs or anything time-based: `ssh n810 date -u MMDDhhmmYYYY.ss` (UTC).
+**Clock:** the N810 resets to 1970 on every reboot (no `hwclock`). After each boot, set it from the laptop in PowerShell, before installs or anything time-based:
+`ssh n810 date -u ((Get-Date).ToUniversalTime().ToString('MMddHHmmyyyy.ss'))`
 
 ### Node
 | Name | Where | Purpose |
