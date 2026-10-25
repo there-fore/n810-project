@@ -51,7 +51,7 @@ The display colours, camera resolution, battery, size, price and history come fr
 | SSH | OpenSSH 4.7p1 (2008). RSA and DSA only; no ed25519. Modern clients need legacy flags. The client has no `KexAlgorithms` option but offers SHA-1 key exchange by default. |
 | Browser | MicroB. Most modern HTTPS sites fail. |
 | Users | Normal user `user` (uid 29999, home `/home/user`); root via rootsh (home `/root`). Each has its own `~/.ssh`. |
-| Clock | Wrong on this unit: read August 1970 on 2026-10-25. No `hwclock`; set it from the laptop with `date -u` (see the cheat sheet). Don't trust file times. |
+| Clock | Resets to 1970 on every reboot (confirmed 2026-10-25). No `hwclock`; set it from the laptop after each boot (see the cheat sheet). Don't trust file times. |
 | Python and graphics | Python 2.5.2 and pygame 1.7.1 (added 2026-10-25). GTK 2.10 and SDL 1.2.8 were already installed. No compiler on the device. |
 
 ### Fit
@@ -62,7 +62,7 @@ The display colours, camera resolution, battery, size, price and history come fr
 
 ### Working within the limits
 - **Memory:** 128 MB of RAM is the hardest limit. Keep the 112 MB swap enabled. Close unused apps, and prefer small C programs over interpreted languages. Turn off `sshd` when it's not in use (`/etc/init.d/ssh stop` as root).
-- **Network:** each round trip on the hotspot costs about 229 ms, so batch requests and reuse one SSH connection. Send compact data, and compress only when the transfer time saved exceeds the CPU time spent. Offload work when local compute time > transfer time + round trip + remote compute time.
+- **Network:** each round trip on the hotspot measured about 229 ms (most of it the N810's Wi-Fi power saving; about 24 ms with it off), so batch requests and reuse one SSH connection. Send compact data, and compress only when the transfer time saved exceeds the CPU time spent. Offload work when local compute time > transfer time + round trip + remote compute time.
 - **Battery:** Wi-Fi and polling drain it fastest. Prefer event-driven waits so the device can sleep.
 
 **Constraints, ranked:** CPU speed; memory; network dependence and latency; battery; aging software and dead repositories.
@@ -124,7 +124,9 @@ Check free space in Control Panel > Memory, or size folders in the terminal with
 Every connection needs three layers: a **link** (radio or cable), **addressing** (both ends on one network), and a **service** (something listening, such as `sshd`). When something fails, find the lowest layer that doesn't work.
 
 ### Wi-Fi
-The N810 reaches the internet, and the node, only through the phone hotspot. It isn't tied to the laptop's Wi-Fi. The hotspot lets clients reach each other, which is why the laptop can reach the N810. About 10% of transmitted Wi-Fi packets showed errors; keep the N810 close to the phone.
+The N810 reaches the internet, and the node, through the phone hotspot, or at home through the **home Wi-Fi** (since 2026-10-25; 2.4 GHz, WPA2). Either network works for the laptop as long as both are on it and it lets clients reach each other: the iPhone hotspot does, and so does the home Wi-Fi. About 10% of transmitted Wi-Fi packets showed errors; keep the N810 close to the access point and use 100 mW transmit power.
+
+**Most of the delay is the N810's own power saving.** On the home Wi-Fi (2026-10-25), with power saving at Maximum, pings ranged 6–366 ms (average 204). With it Off, the average was 24 ms (7–146 ms, 0% loss). The router hop is fast; the N810's radio was dozing between beacons. SSH connect + one command takes about 3 s on any network, because the N810's CPU does the key exchange. A laptop Mobile Hotspot ("ARTIE", 2.4 GHz) was tried and wasn't visible while the laptop was connected at 5 GHz (channel 100).
 
 Venue or campus Wi-Fi may not work: captive login pages and WPA2-Enterprise (eduroam) can block the N810, and many networks stop devices reaching each other. A USB link avoids both (see Other routes).
 
@@ -170,11 +172,11 @@ Test from the N810: `ssh onode2 hostname` should print `smalldevllmnode`. Confir
 ### Other routes
 | Route | Status | When to use |
 |---|---|---|
-| USB networking (N810 `192.168.2.15`, host `192.168.2.14`) | Tools installed; not attempted. Windows likely needs RNDIS, which OS2008's USB networking may not offer. | No Wi-Fi available |
+| USB networking (N810 `192.168.2.15`, host `192.168.2.14`) | **Parked 2026-10-25.** N810 side is ready: `g_ether` includes RNDIS, `usb0` is set in `/etc/network/interfaces` (no gateway, so Wi-Fi stays the default route), and `probes/usbnet.sh` switches one step at a time (`stop` undoes it). Two blockers: (1) with the original cable, straight into either laptop port, no data link forms at all, even in drive mode and after a reboot (N810 stays `b_idle`/`Vbus off`; Windows sees no device; the ports work, shown with an Apple Watch charger as `05AC:1392`), so the cable's data wires or the N810's socket are suspect; (2) OS2008's `g_ether` is known not to work with Windows hosts ([wiki](https://wiki.maemo.org/USB_networking), [bug 3243](https://bugs.maemo.org/show_bug.cgi?id=3243)); Linux hosts work. | No Wi-Fi available; retry only with a known data cable and a Linux host (e.g. a VirtualBox VM with USB passthrough) |
 | Ad-hoc Wi-Fi (`devel_adhoc` profile) | Untested | No hotspot, or a hotspot that isolates clients |
-| Bluetooth PAN | Untested | Low bandwidth, cable-free |
+| Bluetooth PAN | **Not available.** The laptop pairs with the N810 (listed as `n810`), but the N810 has no PAN pieces (`bnep`, `pand`) and the mirror's `maemo-pan` needs the missing `libicd-network-dummy`. | — |
 | Laptop as package server (`python3 -m http.server`) | Fallback | Mirror down. Packages must be gzip-compressed. |
-| Memory card or USB mass storage | Works by default | Moving files, not live control |
+| Memory card or USB mass storage | Didn't appear on this laptop with the original cable (2026-10-25); see USB networking above | Moving files, not live control |
 
 ### Left to do
 - Disable root password login on the N810 (`PasswordAuthentication no` in `/etc/ssh/sshd_config`) before using shared networks.
@@ -310,3 +312,5 @@ The course dossiers (`mfadt/sld-fall-2026/dossiers`) hold measured advice on Oll
 **2026-10-23** (Stage 3): Assessed llamatalk: onode only, nothing for the N810. Built it from source on onode, downloaded the `asr e2b tts` models (4.4 GB), and started its three servers on `127.0.0.1:8091–8093`. Gemma E2B answered in 2.1 s, speech was made at about 2x real time, and speech recognition took 1.3 s. Ollama and `gemma4:e4b` were left as they were. Notes split into this log, [CHEATSHEET.md](CHEATSHEET.md) and [PROJECT.md](PROJECT.md).
 
 **2026-10-25** (sensor probes, for the October creature demo): Found the clock at August 1970, which made apt reject signing keys; set it from the laptop. Installed Python 2.5, pygame and `gst-launch-0.10` from the Diablo mirror (unsigned, `--allow-unauthenticated`). Measured touch, light sensor, keyboard slide and mic; results and scripts in [probes/SENSORS.md](probes/SENSORS.md). Lock switch and headphone jack not verified.
+
+**2026-10-25, later** (direct link): Tried USB networking. `g_ether` (with RNDIS) loaded cleanly, but no data link formed with the original cable on either laptop port, in drive or network mode, even after a reboot; OS2008's `g_ether` is also known to fail with Windows (bug 3243). Parked. Bluetooth pairs but has no PAN on the N810. The reboot confirmed the clock resets to 1970. Then: the laptop's Mobile Hotspot wasn't visible, but the N810 joined the home Wi-Fi directly, so the laptop stays on fast 5 GHz and still reaches it. Turning N810 power saving off cut average ping from 204 to 24 ms. `ssh n810` now picks the home or phone address automatically (see the cheat sheet).

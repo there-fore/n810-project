@@ -58,7 +58,11 @@ Everything above reacts on the device in under ~200 ms. Only narration and speec
 | `ssh onode` | Log in to the node as `ubuntu` |
 | `cmd /c "ssh onode2 bash -s < file.sh"` | Run a script on the node without PowerShell adding `\r` to every line |
 
-If the hotspot gives the N810 a new address, change only the `HostName` line of `n810` in `~/.ssh/config`.
+**`ssh n810` picks the network by itself.** Before connecting, `~/.ssh/n810-at-home.cmd` checks the laptop's Wi-Fi: on the **home Wi-Fi** it uses `<N810-home-IP>`, anywhere else the phone hotspot address. One saved key covers both (`HostKeyAlias n810`). Check which address it will use: `ssh -G n810 | findstr hostname`.
+
+If a network gives the N810 a new address, change that address in `~/.ssh/config`: the `Match … exec` rule for home, the `Host n810` entry for the phone. Find the N810's address on the device with `/sbin/ifconfig wlan0`. The laptop and N810 must be on the same network; at school or a coworking space, use the phone hotspot (those networks usually block devices from reaching each other).
+
+**N810 Wi-Fi settings** (per connection, under Advanced): home Wi-Fi = power saving **Off**, WPA2 only, 100 mW. Power saving off cut average ping from 204 ms to 24 ms; leave it on for battery use.
 
 ## On the node (`ssh onode`)
 
@@ -87,7 +91,8 @@ The prompt should read `ubuntu@smalldevllmnode`. If it doesn't, you're still on 
 
 Package catalog: `http://maemo.viniciuspaes.com/extras/`, distribution `diablo`, components `free non-free`. The mirror is unsigned, so command-line installs need `apt-get install --allow-unauthenticated <package>`. Sensor paths and measurements: [probes/SENSORS.md](probes/SENSORS.md).
 
-**Clock:** the N810 read 1970 on 2026-10-25 and has no `hwclock`, so a set time probably won't survive a reboot (not yet checked). Set it from the laptop before installs or anything time-based: `ssh n810 date -u MMDDhhmmYYYY.ss` (UTC).
+**Clock:** the N810 resets to 1970 on every reboot (no `hwclock`). After each boot, set it from the laptop in PowerShell, before installs or anything time-based:
+`ssh n810 date -u ((Get-Date).ToUniversalTime().ToString('MMddHHmmyyyy.ss'))`
 
 ### Node
 | Name | Where | Purpose |
