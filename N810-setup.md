@@ -33,7 +33,7 @@ Machine-specific details are kept out of this public file. Placeholders such as 
 | Camera | Front webcam, VGA (0.3 MP); no rear camera | Video calls |
 | Wireless | Wi-Fi 802.11b/g, Bluetooth 2.0 + EDR | Wi-Fi is the only internet link |
 | GPS | Built in | About one update per second; too slow for gestures |
-| Sensors | Ambient light (TSL2563) and GPS only | No accelerometer or gyroscope |
+| Sensors | Ambient light (TSL2563) and GPS only | No accelerometer or gyroscope. Light, touch, keyboard slide and mic measured 2026-10-25: [probes/SENSORS.md](probes/SENSORS.md) |
 | USB | 2.0, client and host modes | Networking, mass storage, peripherals |
 | Cellular | None | No carrier calls or SMS |
 | Battery | 1500 mAh | Real battery life not measured |
@@ -51,11 +51,12 @@ The display colours, camera resolution, battery, size, price and history come fr
 | SSH | OpenSSH 4.7p1 (2008). RSA and DSA only; no ed25519. Modern clients need legacy flags. The client has no `KexAlgorithms` option but offers SHA-1 key exchange by default. |
 | Browser | MicroB. Most modern HTTPS sites fail. |
 | Users | Normal user `user` (uid 29999, home `/home/user`); root via rootsh (home `/root`). Each has its own `~/.ssh`. |
-| Clock | Wrong on this unit (October files show August dates). Don't trust file times. |
+| Clock | Wrong on this unit: read August 1970 on 2026-10-25. No `hwclock`; set it from the laptop with `date -u` (see the cheat sheet). Don't trust file times. |
+| Python and graphics | Python 2.5.2 and pygame 1.7.1 (added 2026-10-25). GTK 2.10 and SDL 1.2.8 were already installed. No compiler on the device. |
 
 ### Fit
-- **Strong:** text entry, control panels, terminal and SSH, image viewing, audio playback, small data exchange, plain line-by-line text.
-- **With limits:** VoIP, voice capture (recognize on the server), small C programs.
+- **Strong:** text entry, control panels, terminal and SSH, image viewing, audio playback, small data exchange, plain line-by-line text, simple pygame graphics and touch, reading light/slide/touch as numbers.
+- **With limits:** VoIP, voice capture (8 kHz mono only; recognize on the server), small C programs (must be cross-compiled).
 - **Offload:** anything compute-heavy, speech recognition, language models.
 - **Poor:** modern web, full-screen terminal programs, video, large data.
 
@@ -254,7 +255,7 @@ Scripts in `/home/user` on the N810, linked in `/usr/bin` so they work from any 
 - Try `ask` by hand in X Terminal; check the text fits the 800x480 screen.
 - Decide whether `agent` (491 s per task) goes in the demo.
 - Decide whether a fast `ask` should use Gemma E2B (port 8092, about 2 s) instead of `gemma4:e4b` (26–36 s). It needs the spec sheet in its system prompt.
-- Find a way to record audio on the N810. The GStreamer mic plugin (`dsppcm`) is there, but `gst-launch`, `arecord` and `esdrec` are missing. Playback exists (`play-sound`).
+- Send N810 recordings to llamatalk's speech recognition. Recording works since 2026-10-25 (`gst-launch-0.10 dsppcmsrc`, 8 kHz mono; see [probes/SENSORS.md](probes/SENSORS.md)); the recognizer was tested with 16 kHz audio, so resample and normalize on the node first. Playback exists (`play-sound`).
 - The node-side helpers and N810 launchers exist only on those machines, not in this repo.
 
 ### Lessons
@@ -307,3 +308,5 @@ The course dossiers (`mfadt/sld-fall-2026/dossiers`) hold measured advice on Oll
 **2026-10-21** (Stages 2–3): `ssh onode2` confirmed as `user` (from the laptop and in X Terminal). `ask` reworked to call Ollama directly through `n810-ask`; new `agent` launcher for OpenCode tasks through `n810-agent`. `gemma4:e4b` loaded and pinned, with a warm-up service that reloads it whenever Ollama starts. `ask` answers in 26–36 s; an `agent` file listing took 491 s. Found the N810's clock is wrong.
 
 **2026-10-23** (Stage 3): Assessed llamatalk: onode only, nothing for the N810. Built it from source on onode, downloaded the `asr e2b tts` models (4.4 GB), and started its three servers on `127.0.0.1:8091–8093`. Gemma E2B answered in 2.1 s, speech was made at about 2x real time, and speech recognition took 1.3 s. Ollama and `gemma4:e4b` were left as they were. Notes split into this log, [CHEATSHEET.md](CHEATSHEET.md) and [PROJECT.md](PROJECT.md).
+
+**2026-10-25** (sensor probes, for the October creature demo): Found the clock at August 1970, which made apt reject signing keys; set it from the laptop. Installed Python 2.5, pygame and `gst-launch-0.10` from the Diablo mirror (unsigned, `--allow-unauthenticated`). Measured touch, light sensor, keyboard slide and mic; results and scripts in [probes/SENSORS.md](probes/SENSORS.md). Lock switch and headphone jack not verified.

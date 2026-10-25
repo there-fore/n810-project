@@ -104,7 +104,7 @@ The N810 normally runs as the regular user `user` (home `/home/user`), not root.
 7. Keep `N810-private.md` out of git (it is git-ignored).
 8. Optional: an ASCII status screen script on the node for live numbers in the demo.
 9. Decide whether a fast `ask` should use Gemma E2B on port 8092 (about 2 s) instead of `gemma4:e4b` (26–36 s). It needs the spec sheet.
-10. Speech on the N810: find a way to record audio (the GStreamer mic plugin `dsppcm` is there, but `gst-launch`, `arecord` and `esdrec` are missing; `play-sound` exists for playback). Then a `talk` launcher: record a WAV, send it through `onode2`, play the spoken reply. Shrink replies to 8 kHz on the node first (about 47 KB per second of speech at 24 kHz).
+10. Speech on the N810: recording works since 2026-10-25 (`gst-launch-0.10 dsppcmsrc`, 8 kHz mono, see `probes/SENSORS.md`); `play-sound` exists for playback. Still to build: a `talk` launcher: record a WAV, send it through `onode2`, play the spoken reply. Shrink replies to 8 kHz on the node first (about 47 KB per second of speech at 24 kHz).
 
 ## Files
 
@@ -115,6 +115,7 @@ The N810 normally runs as the regular user `user` (home `/home/user`), not root.
 - Rose's archived notes, `claude/N810 Capabilities and Bottlenecks 2026-10-23.md` in Claude (not in the repo): older detail that wasn't carried over (package versions, the full connection log, the USB diagnostic ladder, N900 class-guide notes). Frozen as of 2026-10-21; ask Rose for it if a detail isn't in the repo.
 - `onode-legacy-setup.sh` (in repo): the script that set up port 2222 on the node. Already run once successfully.
 - llamatalk's `start.sh`, `stop.sh` and the test script (`~/llamatalk/test/smoke.sh`) exist only on the node, not in the repo.
+- `probes/` (in repo): sensor probe scripts (Python 2.5, run on the N810) and `SENSORS.md`, the measured sensor table.
 - `dossiers-index.md` (in repo): index of the course dossiers, with what each file answers and where.
 - Class repo: `mfadt/sld-fall-2026` (private). Useful guides: `docs/oracle-ampere-node.md`, `docs/coding-on-your-node.md`, `docs/first-build-on-a-device.md`. Your login has access.
 - Class wiki: `mfadt/sld-fall-2026` wiki. The N810 devices are on the "Nokia Devices Library" page.
