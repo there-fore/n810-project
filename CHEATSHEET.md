@@ -1,6 +1,6 @@
 # N810 Cheat Sheet
 
-What to type, where, and what's installed. Current state only; the history is in [N810-setup.md](N810-setup.md). Last checked 2026-10-23.
+What to type, where, and what's installed. Current state only; the history is in [N810-setup.md](N810-setup.md). Last checked 2026-10-25.
 
 **First check which machine you're on.** Each short name only exists on one machine: `n810` on the laptop, `onode2` on the N810. Typed on the wrong one, it fails with `Name or service not known` or `Could not resolve hostname`.
 
@@ -68,8 +68,12 @@ The prompt should read `ubuntu@smalldevllmnode`. If it doesn't, you're still on 
 | pc-connectivity-manager, maemo-control-usb | package | USB networking setup (not in use yet) |
 | `ask`, `agent`, `oc` | script in `/home/user`, linked in `/usr/bin` | Launchers above |
 | `id_rsa_onode`, `onode2` config | key and config, in both `/root/.ssh` and `/home/user/.ssh` | Login to the node |
+| python2.5, python2.5-pygame (with numeric, libsdl-ttf) | package, added 2026-10-25 | Python 2.5.2 + pygame 1.7.1 for the creature demo and probes |
+| gstreamer0.10-tools | package, added 2026-10-25 | `gst-launch-0.10`, used to record the mic (`dsppcmsrc`) |
 
-Package catalog: `http://maemo.viniciuspaes.com/extras/`, distribution `diablo`, components `free non-free`.
+Package catalog: `http://maemo.viniciuspaes.com/extras/`, distribution `diablo`, components `free non-free`. The mirror is unsigned, so command-line installs need `apt-get install --allow-unauthenticated <package>`. Sensor paths and measurements: [probes/SENSORS.md](probes/SENSORS.md).
+
+**Clock:** the N810 read 1970 on 2026-10-25 and has no `hwclock`, so a set time probably won't survive a reboot (not yet checked). Set it from the laptop before installs or anything time-based: `ssh n810 date -u MMDDhhmmYYYY.ss` (UTC).
 
 ### Node
 | Name | Where | Purpose |
