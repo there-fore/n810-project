@@ -1,6 +1,6 @@
 # Creature demo sketch (October)
 
-A short demo, **separate from the final project** ([PROJECT.md](PROJECT.md), Environmental Vibe DJ). Its purpose is to show what the N810 can do before the final project. Brief written 2026-10-25 from the original handover and the sensor probes; the design itself starts here.
+A short demo, **separate from the final project** ([PROJECT.md](PROJECT.md), Environmental Vibe DJ). Its purpose is to show what the N810 can do before the final project. Brief written 2026-10-25 from the original handover and the sensor probes. The proposed design and build plan are under [Design](#design-proposed-2026-10-25) and [Build plan](#build-plan).
 
 ## Concept
 
@@ -47,18 +47,116 @@ Full table, paths and scripts: [probes/SENSORS.md](probes/SENSORS.md). Quick ref
 - Gemma E2B (llamatalk, port 8092) listens on onode's `127.0.0.1` only and is reached through that SSH connection. It needs a fact sheet in its prompt, or it invents things. Not yet built: a node-side helper like `n810-ask` that takes the creature's state and returns one short line of narration.
 - Network: at home the N810 uses the home Wi-Fi (about 24 ms with N810 power saving off); elsewhere the phone hotspot. `ssh n810` on the laptop picks the right address.
 
-## Open design questions
+## Design (proposed 2026-10-25)
 
-1. **Who is the creature?** A name, a personality, what it wants. This decides what the narration sounds like.
-2. **What does it remember?** Which events become memories (being woken, being poked, the door opening), and how they change its mood over minutes.
-3. **What does the LLM add** that fixed rules can't? For example, connecting several memories into a short story, or answering what you say to it.
-4. **What does the screen show** while the mind is thinking (2 s or more)? Idle animation, a thought bubble, nothing?
-5. **How long is the demo**, and what does a viewer do in it? A script of 1–3 minutes would set the scope.
-6. **Sound:** chirps from `pygame.mixer`, spoken narration (text-to-speech on the node, sent back as audio), or text only?
+Rose chose these on 2026-10-25: a **shy hatchling called Mote**, a **guided 2-minute script**, **chirps + text** (no spoken narration), and an LLM that gives **mood-change lines** and **answers what you say**. Talking starts by **just speaking** (no button). The keyboard door opens onto **the outside room**. The demo ends with a **goodnight line**. The numbers below (thresholds, trust points, timings) are Claude's first proposal for Rose to review; tune them on the device.
 
-## Suggested first steps
+### Who Mote is
 
-1. Answer questions 1 and 5 (who, and the shape of a 1–3 minute demo).
-2. Smallest complete loop: a pygame window with a blob that sleeps when the light is covered and wakes when uncovered. No network.
-3. Add touch gestures, then the slide, then the mic startle.
-4. Add one narration line from onode at a mood change, keeping the device responsive while it waits.
+- **What it is:** a small round blob that has just hatched inside the N810. It has never seen anything outside the screen.
+- **What it wants:** to learn what is outside the device. Opening the keyboard ("the door") is the thing it wants most.
+- **Personality:** shy and curious. It starts timid, hides from loud sounds, and warms up to petting, being held and a gentle voice.
+- **How it talks:** first person, present tense, short wide-eyed sentences (12 words at most). It doesn't know the names of things, so it describes them by feel: "a warm thing", "the big bright". Example: *"Something warm touched me. I think it was you."*
+- **Why this suits the LLM:** Gemma E2B invents facts. Mote knows no facts, only what it has sensed, so its "fact sheet" is its own memory list and anything odd it says reads as a hatchling's guess.
+
+### Mood and memory (all on the device)
+
+**Trust** is one number from 0 to 10, starting at 3. It sets the mood band:
+
+| Trust | Mood | Looks like |
+|---|---|---|
+| 0–3 | **timid** | Small, eyes half open, stays near the bottom edge |
+| 4–6 | **curious** | Normal size, looks toward your finger |
+| 7–10 | **fond** | Bigger, bouncy, follows your finger |
+
+| Event | Trust change |
+|---|---|
+| Petting | +1 for every 1.5 s of petting (at most +3 per stroke) |
+| Hold (comfort) | +1 once per hold; also ends a hide early |
+| Gentle voice (it hears you talk) | +1 per reply |
+| Single poke | 0 |
+| 3 or more pokes within 5 s | −1 |
+| Clap / loud bang | −2 |
+| Door opens (it sees outside) | +2 |
+
+**Memories** are a list of the last 8 events, each with the time since it woke: *woke up*, *petted*, *poked*, *poked a lot*, *startled by a loud sound*, *held*, *heard "…"*, *saw outside (bright / dim)*. They stay on the device and are sent with every LLM request; the LLM is told it knows nothing else.
+
+### Demo script (about 2 minutes, guided)
+
+The presenter does each step. Every step's reaction happens on the device at once; the "Mind" column is the LLM line that follows a couple of seconds later.
+
+| Time | Presenter does | Mote does (instantly) | Mind says (about 2 s later) | Trust → mood |
+|---|---|---|---|---|
+| 0:00 | Holds a thumb over the light sensor while introducing the demo | Asleep, curled up, slow breathing. Ignores voice while asleep | — | 3 timid |
+| 0:15 | Uncovers the sensor | Eyes flicker open, stretch, a little chirp | Wake line: *"It's bright. Is someone there?"* | 3 timid |
+| 0:25 | Strokes Mote slowly for about 3 s | Leans into the finger, purr chirp, blush | Mood line (timid → curious) | 5 curious |
+| 0:40 | Pokes it once | Flinch, "eep" chirp, bounce | — | 5 curious |
+| 0:50 | Claps once | Shrinks and hides at the bottom, eyes shut, for 3 s, then peeks out | Startle line (curious → timid): *"That was loud. I'll stay small."* | 3 timid |
+| 1:05 | Holds a finger still on it | Calms, eyes close happily, comes back out | Mood line (timid → curious) | 4 curious |
+| 1:15 | Says something gentle, e.g. "Hi Mote, it's okay" | Ripples around its "ears" while listening, then a thought bubble | Reply to what was said | 5 curious |
+| 1:35 | Slides the keyboard out | The door opens: the background becomes the outside room, Mote peeks out | Door line about the outside, bright or dim from the light sensor | 7 fond |
+| 1:50 | Closes the keyboard, covers the light sensor | Yawns, eyes droop | Goodnight line that mentions one memory, then it sleeps | 7 fond |
+
+Mood lines and the startle line merge when they happen together (one line, not two).
+
+### Affordance → behaviour (with thresholds)
+
+Starting numbers come from [probes/SENSORS.md](probes/SENSORS.md). Mic and light use the room's recent level (the "baseline"), not fixed values, so the same code works in a dim room and a bright one.
+
+| Affordance | Read how | Detect when | Mote does |
+|---|---|---|---|
+| **Light covered** | Poll `lux` 3 times a second | First reading ≤ 2 → *drowsy* (eyes half-close, feels instant). Still ≤ 2 after 2 s → *asleep* | Sleeps. While awake for 20 s or more, falling asleep triggers the goodnight line first |
+| **Light uncovered** | Same | 2 readings in a row ≥ 5 (about 0.8 s) | Wakes (wake line) |
+| **Light, after a slide** | — | Ignore light changes for 1.5 s after the keyboard moves, because opening it tilts the device | — |
+| **Poke** | pygame mouse events | Down and up within 0.3 s, moved less than 10 px | Flinch + "eep". 3 or more in 5 s → annoyed face, trust −1 |
+| **Pet** | Same | Finger down on Mote and moved 15 px or more | Leans in, purr, trust rises |
+| **Hold** | Same, plus a timer (a still finger sends no events) | Down, moved less than 10 px, for over 1 s | Calms; ends a hide early |
+| **Touch targets** | — | Mote is at least 160 px wide; its hit area adds a 20 px margin (jitter is ≈ 2 px) | — |
+| **Keyboard opens** | Poll `slide/state` 10 times a second | `closed` → `open` | Door scene (outside room); door line 1 s later, using the light level after it settles |
+| **Keyboard closes** | Same | `open` → `closed` | Back inside |
+| **Clap** | Mic loudness every 100 ms; baseline = median of the last 5 s of quiet slices (at least 2) | One slice above 20 × baseline and above 600, back below 5 × baseline within 300 ms | Startle and hide for 3 s (1.5 s if fond), trust −2. While asleep: it stirs and rolls over but stays asleep |
+| **Voice** | Same | Above 8 × baseline and above 40 for at least 0.8 s of the last 1 s (short dips allowed) | Starts listening (ripples). Keeps 0.5 s of audio from before, so the first word isn't cut |
+| **Voice ends** | Same | Below 4 × baseline for 0.7 s, or 6 s in total | Sends the recording to the mind; thought bubble |
+| **Mic, ignored** | — | While asleep (except a clap), while thinking, for 300 ms after each chirp (the speaker is close to the mic), and the first 100 ms after the mic starts (a click) | — |
+
+The mic runs from start to end (it takes about 1 s to start).
+
+### When and what the LLM says
+
+**Triggers** (boundaries only, never in the middle of an event):
+
+1. Waking up
+2. A mood band change (timid ↔ curious ↔ fond)
+3. After a startle, when Mote peeks out again
+4. The door opening (with "bright" or "dim" from the light sensor)
+5. The viewer speaking (reply to what it heard)
+6. Goodnight, when the light is covered after Mote has been awake 20 s or more
+
+**Pacing:** one request at a time. Unprompted lines (1–4, 6) wait at least 8 s after the last one; if several pile up, only the newest is sent. Replies to speech skip the wait.
+
+**What it sends:** a short system prompt (Mote's personality and rules: 12 words at most, first person, no real names or facts, plain ASCII, no emoji) and the state: the trigger, mood, trust, memories and, for speech, what it heard.
+
+**While the mind thinks:** a thought bubble with three dots. Mote keeps breathing and blinking and still reacts to touch, light and claps; nothing on the device waits for the network.
+
+**Showing the line:** a speech bubble above Mote for 4 s plus 0.1 s per character, then it fades. A chirp plays when it appears.
+
+**If the mind is slow or offline:** after 4 s, the bubble closes and Mote just smiles. For the goodnight line, it falls asleep anyway. Each trigger also has one fixed fallback line on the device, so the whole script works without onode.
+
+### How it fits together
+
+- **On the N810: `mote.py`** (Python 2.5 + pygame), one loop at about 25 frames a second that draws Mote and polls light and the slide. A thread reads the mic (`gst-launch-0.10 dsppcmsrc` writing raw audio to the program; to check: `fdsink` or `filesink location=/dev/stdout`) and works out the loudness. Another thread holds **one** open `ssh onode2` connection to the mind.
+- **On onode: `mote-mind`**, a small helper (in the `n810` user's home) started by that SSH connection. It reads one request at a time: a text request, or a recording (8 kHz). For a recording it resamples to 16 kHz, normalizes the volume, sends it to speech recognition (port 8091), strips the `language English<asr_text>` prefix, then asks Gemma E2B (port 8092) and returns one line.
+- **Python 2.5 has no `json` module**, so the two sides talk in simple `key=value` lines plus a byte count for audio.
+- **Expected waits:** text line about 2 s; speech reply about 1.3 s + 2 s + sending the audio.
+
+## Build plan
+
+Each step ends with a test Rose can do on the device in a visible terminal, with timed prompts. Nothing gets installed or changed on the N810 or onode without her OK.
+
+1. **Smallest loop: a blob that sleeps when the light is covered.** No network, no touch, no sound. First check that pygame can open full screen on the N810's display from an SSH session (`DISPLAY=:0`, as `user`). Then draw Mote breathing and blinking, poll `lux` at 3 Hz, and use the drowsy / asleep / wake thresholds above. Test: cover and uncover 5 times; it should go drowsy at once, sleep after about 2 s and wake within about 1 s, every time.
+2. **Touch:** poke, pet and hold, with trust and the mood bands. Show trust in a small debug corner.
+3. **Keyboard door:** the outside room, plus the 1.5 s light-ignore window.
+4. **Mic:** baseline, clap startle and hide, chirps, and the 300 ms mute after each chirp.
+5. **Mind, text only:** write `mote-mind` on onode (with Rose's OK), the open SSH connection, the wake and mood lines, the thought bubble, the 4 s timeout and fallback lines.
+6. **Voice:** listening detection, sending the recording, the reply.
+7. **Rehearse:** run the script 3 times end to end, measure memory and CPU, log the mic and light levels, and retune the thresholds in the demo room.
