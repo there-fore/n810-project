@@ -6,6 +6,7 @@
 #   test  = timed COVER / UNCOVER prompts, then a summary of reaction times
 #   touch = timed POKE / PET / HOLD prompts, then a summary of what Mote felt
 #   annoy = timed prompts to poke Mote fast, twice (checks the annoyed look)
+#   hold  = timed prompts to hold Mote, then pet and hold (checks the held look)
 #   raw   = log every touch event pygame delivers
 #   secs  = quit after this many seconds (default: run until the top-right
 #           corner is tapped, or Esc / q is pressed)
@@ -23,8 +24,11 @@ WAKE_ANIM = 1.0            # eyes take this long to open; dark again -> asleep
 POKE_TIME = 0.6            # down and up within this, and still -> poke (taps: 0.05-0.55 s)
 STILL = 20                 # px: moved less than this from where it went down
                            # (taps drift 8-9 px, fast ones up to 18)
-PET_MOVE = 25              # px: moved this far -> pet
-HOLD_TIME = 1.0            # still this long -> hold
+PET_MOVE = 25              # px: moved this far within PET_QUICK -> pet
+PET_QUICK = 0.6            # s (swipes cover 80-200 px in well under this)
+PET_FAR = 60               # px: moved this far at any time -> pet
+HOLD_TIME = 1.0            # pressed this long without becoming a pet -> hold
+                           # (a pressing finger can slowly drift ~30 px)
 DROPOUT = 0.1              # s: lifted and back down this fast, nearby, during a
                            # pet or hold, is one touch (light presses drop out)
 MARGIN = 40                # px added around Mote's body for touches (aim is off by up to ~30 px)
@@ -82,6 +86,12 @@ def read_lux():
 def mix(a, b, k):
     return tuple([int(a[i] + (b[i] - a[i]) * k) for i in range(3)])
 
+def draw_heart(screen, x, y, s, color):
+    # two bumps and a point; (x, y) is between the bumps, s is half the width
+    pygame.draw.circle(screen, color, (x - s / 2, y), s / 2 + 1)
+    pygame.draw.circle(screen, color, (x + s / 2, y), s / 2 + 1)
+    pygame.draw.polygon(screen, color, [(x - s, y + 1), (x + s, y + 1), (x, y + s * 13 / 10)])
+
 def dist(a, b):
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
@@ -125,7 +135,8 @@ class Touch:
         g['pos'] = pos
         g['far'] = max(g['far'], dist(pos, g['at']))
         out = [('move', pos)]
-        if g['kind'] != 'pet' and g['far'] >= PET_MOVE:
+        quick = t - g['t'] < PET_QUICK and g['far'] >= PET_MOVE
+        if g['kind'] != 'pet' and (quick or g['far'] >= PET_FAR):
             g['kind'] = 'pet'
             self.stroked += g['far']       # quick swipes are only a few jumps
             out.append(('pet', pos))
@@ -153,9 +164,13 @@ class Touch:
         if self.up_at and t - self.up_at[0] >= DROPOUT:
             return self.finish()
         g = self.g
-        if g and not self.up_at and g['kind'] is None \
-                and t - g['t'] >= HOLD_TIME and g['far'] < STILL:
+        if g and not self.up_at and (
+                (g['kind'] is None and t - g['t'] >= HOLD_TIME) or
+                (g['kind'] == 'pet' and t - g['moved_t'] >= HOLD_TIME)):
+            # pressed a while, or petted and then rested: a hold. Distances
+            # restart here, so it takes PET_FAR of rubbing to pet again.
             g['kind'] = 'hold'
+            g['at'], g['far'] = g['pos'], 0
             return [('hold', g['pos'])]
         return []
 
@@ -175,6 +190,8 @@ class Mote:
         self.trust = TRUST_START
         self.expr = None           # face: notice, flinch, happy, calm, annoyed
         self.expr_until = 0        # 0 = until something changes it
+        self.expr_since = now()
+        self.phase = 0.0           # breathing, kept smooth when its pace changes
         self.felt = '-'            # last thing felt, for the debug corner
         self.finger = None
         self.pet_px = 0.0          # px stroked in this petting session
@@ -202,6 +219,8 @@ class Mote:
         note('trust %d' % self.trust)
 
     def set_expr(self, expr, secs=0):
+        if expr != self.expr:
+            self.expr_since = now()
         self.expr = expr
         self.expr_until = secs and now() + secs or 0
 
@@ -293,6 +312,12 @@ class Mote:
             self.next_blink = t + random.uniform(2.5, 6.0)
         if self.expr_until and t >= self.expr_until:
             self.set_expr(None)
+        period = 2.2                                     # s per breath
+        if self.state == 'asleep':
+            period = 4.0
+        elif self.expr == 'calm':
+            period = 3.6                                 # held: slower
+        self.phase = (self.phase + dt * 2 * math.pi / period) % (2 * math.pi)
         if self.pet_px and t - self.pet_last > PET_GAP:
             self.pet_px, self.pet_gain = 0.0, 0          # petting session over
         if stroked and self.state == 'awake':
@@ -346,20 +371,25 @@ class Mote:
         # draws Mote (not the background); returns the area it covered
         t = now()
         asleep = self.state == 'asleep'
+        calm = self.expr == 'calm'
+        breath = math.sin(self.phase)
+        depth = 0.03
         if asleep:
-            breath = math.sin(t * 2 * math.pi / 4.0)     # slow, 4 s
             bw, bh = 280, 150                            # curled up, flatter
         else:
-            breath = math.sin(t * 2 * math.pi / 2.2)
             bw, bh = 240, 190
+        if calm:                                         # held: settles, sinks
+            k = min(1.0, (t - self.expr_since) / 0.6)
+            bw, bh = int(bw * (1 + 0.08 * k)), int(bh * (1 - 0.12 * k))
+            depth = 0.05                                 # deeper, slower breaths
         stretch = squash = hop = lean = 0
         if self.state == 'waking':
             stretch = math.sin((t - self.since) / WAKE_ANIM * math.pi) * 30
         if self.expr == 'flinch':
             squash = 25 * max(0.0, self.expr_until - t) / 0.4
-        bw = int((bw * (1 + 0.03 * breath) - stretch * 0.5 + squash) * self.scale)
-        bh = int((bh * (1 - 0.03 * breath) + stretch - squash) * self.scale)
-        if self.mood() == 'fond' and self.state == 'awake' and self.expr != 'calm':
+        bw = int((bw * (1 + depth * breath) - stretch * 0.5 + squash) * self.scale)
+        bh = int((bh * (1 - depth * breath) + stretch - squash) * self.scale)
+        if self.mood() == 'fond' and self.state == 'awake' and not calm:
             hop = int(abs(math.sin(t * math.pi / 0.6)) * 10)
         if self.finger and self.expr == 'happy':
             lean = max(-15, min(15, (self.finger[0] - self.x) / 4))
@@ -391,6 +421,15 @@ class Mote:
                 pos = (int(cx + bw / 2 - 10 + k * 60), int(body.top - 20 - k * 120))
                 screen.blit(img, pos)
                 area = area.union(Rect(pos, img.get_size()))
+
+        # a small heart floats up every 1.6 s while held
+        if calm:
+            k = ((t - self.expr_since) % 1.6) / 1.6
+            s = 9
+            hx = int(cx + bw / 4 + math.sin(k * math.pi * 2) * 6)
+            hy = int(body.top - 6 - k * 70)
+            draw_heart(screen, hx, hy, s, mix(BLUSH, self.background(), k))
+            area = area.union(Rect(hx - s - 2, hy - s - 2, 2 * s + 4, 3 * s))
         return area
 
     def draw_eyes(self, screen, cx, ey, bw):
@@ -404,9 +443,12 @@ class Mote:
         if self.expr == 'notice':
             r = 17                                       # eyes widen
         for side, ex in ((-1, cx - bw / 5), (1, cx + bw / 5)):
-            if self.expr in ('happy', 'calm'):           # ^ ^
+            if self.expr == 'happy':                     # ^ ^
                 pygame.draw.lines(screen, EYE, 0,
                     [(ex - 12, ey + 4), (ex, ey - 6), (ex + 12, ey + 4)], 4)
+            elif self.expr == 'calm':                    # closed, content: u u
+                pygame.draw.lines(screen, EYE, 0, [(ex - 13, ey), (ex - 7, ey + 5),
+                    (ex, ey + 7), (ex + 7, ey + 5), (ex + 13, ey)], 4)
             elif self.expr == 'flinch':                  # > <
                 pygame.draw.lines(screen, EYE, 0, [(ex + 8 * side, ey - 8),
                     (ex - 8 * side, ey), (ex + 8 * side, ey + 8)], 4)
@@ -445,6 +487,10 @@ TOUCH_TRIES = [
     ('PET Mote: stroke it side to side', 6, 'pet (expect: pet, trust +2 or +3)'),
     ('HOLD: press the middle of Mote, keep still', 4, 'hold (expect: hold, trust +1)'),
     ('POKE Mote 4 times, fast', 5, 'pokes (expect: pokes, annoyed, trust -1)'),
+]
+HOLD_TRIES = [
+    ('HOLD: press the middle of Mote, keep still', 5, 'hold 1 (expect: hold)'),
+    ('PET Mote a little, then HOLD it still', 7, 'pet then hold (expect: pet, hold)'),
 ]
 ANNOY_TRIES = [
     ('POKE Mote 4 times, fast, then watch it', 5, 'pokes 1 (expect: annoyed)'),
@@ -515,7 +561,7 @@ def main():
     for a in args:
         if a.isdigit():
             limit = int(a)
-        elif a in ('test', 'touch', 'annoy'):
+        elif a in ('test', 'touch', 'annoy', 'hold'):
             mode = a
     raw = 'raw' in args            # log every touch event pygame delivers
 
@@ -538,6 +584,8 @@ def main():
         steps = light_schedule()
     elif mode == 'touch':
         steps = touch_schedule(TOUCH_TRIES)
+    elif mode == 'hold':
+        steps = touch_schedule(HOLD_TRIES)
     elif mode == 'annoy':
         steps = touch_schedule(ANNOY_TRIES)
     if steps and limit is None:
@@ -631,7 +679,7 @@ def main():
 
     if mode == 'test':
         light_summary()
-    elif mode in ('touch', 'annoy'):
+    elif mode in ('touch', 'annoy', 'hold'):
         touch_summary(touch, mote)
     pygame.quit()
     log('stopped')
