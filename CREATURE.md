@@ -71,7 +71,7 @@ Rose chose these on 2026-10-25: a **shy hatchling called Mote**, a **guided 2-mi
 
 | Event | Trust change |
 |---|---|
-| Petting | +1 for every 1.5 s of petting (at most +3 per stroke) |
+| Petting | +1 for every 300 px stroked, added up over quick swipes; at most +3 per petting session, which ends after 2 s without petting. (Changed in step 2: Rose pets in quick swipes and wants petting to win Mote over fast) |
 | Hold (comfort) | +1 once per hold; also ends a hide early |
 | Gentle voice (it hears you talk) | +1 per reply |
 | Single poke | 0 |
@@ -108,10 +108,11 @@ Starting numbers come from [probes/SENSORS.md](probes/SENSORS.md). Mic and light
 | **Light covered** | Poll `lux` 3 times a second | First reading ≤ 2 → *drowsy* (eyes half-close, feels instant). Still ≤ 2 after 2 s → *asleep* | Sleeps. While awake for 20 s or more, falling asleep triggers the goodnight line first |
 | **Light uncovered** | Same | First reading ≥ 5: eyes start opening at once (1 s). Dark again during that second → back to sleep. (Waiting for 2 readings made it wake 2–4 s late.) | Wakes (wake line) |
 | **Light, after a slide** | — | Ignore light changes for 1.5 s after the keyboard moves, because opening it tilts the device | — |
-| **Poke** | pygame mouse events | Down and up within 0.3 s, moved less than 10 px | Flinch + "eep". 3 or more in 5 s → annoyed face, trust −1 |
-| **Pet** | Same | Finger down on Mote and moved 15 px or more | Leans in, purr, trust rises |
-| **Hold** | Same, plus a timer (a still finger sends no events) | Down, moved less than 10 px, for over 1 s | Calms; ends a hide early |
-| **Touch targets** | — | Mote is at least 160 px wide; its hit area adds a 20 px margin (jitter is ≈ 2 px) | — |
+| **Poke** | pygame mouse events | Down and up within 0.6 s, moved less than 20 px (measured taps: 0.05–0.55 s, drifting up to 18 px) | Squints `> <` and squashes. 3 or more in 5 s → annoyed for 2 s (shakes, turns reddish, thick frown), trust −1 |
+| **Pet** | Same | Finger down on Mote and moved 25 px or more | Smiles `^ ^`, blushes, leans toward the finger; trust rises |
+| **Hold** | Same, plus a timer (a still finger sends no events) | Down, moved less than 20 px, for over 1 s | Closes its eyes happily; ends a hide early |
+| **Touch targets** | — | Mote is at least 200 px wide; its hit area adds a 40 px margin (aim is off by up to ~30 px). A lift and press again within 0.1 s, nearby, during a pet or hold counts as one touch (light presses drop out); fast pokes stay separate | — |
+| **Mood looks** | — | Timid: smaller (85%), eyes a third closed. Curious: normal size, eyes follow your finger. Fond: bigger (110%), hops, follows your finger across the screen | — |
 | **Keyboard opens** | Poll `slide/state` 10 times a second | `closed` → `open` | Door scene (outside room); door line 1 s later, using the light level after it settles |
 | **Keyboard closes** | Same | `open` → `closed` | Back inside |
 | **Clap** | Mic loudness every 100 ms; baseline = median of the last 5 s of quiet slices (at least 2) | One slice above 20 × baseline and above 600, back below 5 × baseline within 300 ms | Startle and hide for 3 s (1.5 s if fond), trust −2. While asleep: it stirs and rolls over but stays asleep |
@@ -156,6 +157,7 @@ Each step ends with a test Rose can do on the device in a visible terminal, with
 1. **Smallest loop: a blob that sleeps when the light is covered.** No network, no touch, no sound. First check that pygame can open full screen on the N810's display from an SSH session (`DISPLAY=:0`, as `user`). Then draw Mote breathing and blinking, poll `lux` at 3 Hz, and use the drowsy / asleep / wake thresholds above. Test: cover and uncover 5 times; it should go drowsy at once, sleep after about 2 s and wake within about 1 s, every time.
    **Done 2026-10-25** ([mote/mote.py](mote/mote.py)): see [Step 1 results](#step-1-results-2026-10-25) below.
 2. **Touch:** poke, pet and hold, with trust and the mood bands. Show trust in a small debug corner.
+   **Done 2026-10-25**: see [Step 2 results](#step-2-results-2026-10-25) below.
 3. **Keyboard door:** the outside room, plus the 1.5 s light-ignore window.
 4. **Mic:** baseline, clap startle and hide, chirps, and the 300 ms mute after each chirp.
 5. **Mind, text only:** write `mote-mind` on onode (with Rose's OK), the open SSH connection, the wake and mood lines, the thought bubble, the 4 s timeout and fallback lines.
@@ -176,5 +178,21 @@ ssh -t n810 sh /tmp/run-mote.sh test
 - **Display:** pygame opens full screen on the N810 from an SSH session (checked by Rose).
 - **Light, 5 rounds** (seconds after each prompt, including Rose's reaction): drowsy 0.8–1.9 s, asleep 3.0–4.0 s, eyes open 0.8–1.2 s, fully awake 1.8–2.2 s. Every round worked.
 - **Sensor timing:** covering takes lux from about 9 to 0 in 0.3–0.4 s; uncovering usually jumps from 0 to 7–10 in one reading, once via 1 first (0.7 s).
-- **Speed:** a steady 25 frames per second. Python uses about 35–50% of the processor (`top`: 35% awake), the screen server (Xomap) about 6%. Drawing takes 5–8 ms per frame, redrawing only Mote's area cut little, so most of the cost is elsewhere (probably pygame's frame wait). To do before the mic step: try 15 frames per second, and less while asleep.
+- **Speed:** a steady 25 frames per second. Python used about 35–50% of the processor (`top`: 35% awake), the screen server (Xomap) about 6%. Drawing takes 5–8 ms per frame. Step 2 dropped to 20 frames per second awake and 10 asleep: about 19%.
 - **Memory:** about 6.5 MB resident. The web browser's background process (`browserd`) was also running.
+
+## Step 2 results (2026-10-25)
+
+[mote/mote.py](mote/mote.py) now feels touch. Run the touch test from the laptop (after copying the files over as in step 1):
+
+```
+ssh -t n810 sh /tmp/run-mote.sh touch
+```
+
+It prompts on the N810's screen: poke twice, pet, hold, then poke 4 times fast, and prints what Mote felt in each step. `annoy` runs only the fast pokes, twice. `raw` logs every touch event pygame delivers. The bottom-left corner shows trust, mood and the last thing Mote felt.
+
+- **Final run** (the 5th touch test): poke 1 of 2 (the miss lasted 0.55 s, so the limit went from 0.4 to 0.6 s afterwards, untested), pet 6 swipes → +2, hold → +1, fast pokes 5 of 5 felt and annoyed on the 3rd. Rose saw the squint, smile, fond and (after making it stronger) annoyed looks clearly.
+- **Touch reaches pygame in screen pixels.** An aim test ([probes/aim_probe.py](probes/aim_probe.py), 5 crosses) put taps within about 10 px, with one 32 px off in the top-right corner. Early pokes landed about 70 px right of Mote's edge, so the touch margin went from 20 to 40 px and the prompts say "the middle of Mote".
+- **How Rose touches:** taps last 0.05–0.55 s and drift up to 18 px. Petting is quick swipes of 0.15–0.9 s and 80–200 px with lifts in between, not one long stroke. Fast pokes come about 0.1–0.2 s apart, close enough that joining dropouts merged them into one "pet" until dropouts were limited to pets and holds.
+- **Speed:** 20 frames per second, about 19% of the processor (down from 35% at 25 frames per second).
+- **Not yet:** touch while asleep is ignored (the design doesn't say what it should do). Hiding (from a clap) comes with the mic step, so "hold ends a hide early" is untested.
