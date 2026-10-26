@@ -36,7 +36,7 @@ Examples: `ask what is a Nokia N810?` · `agent show me the files in this folder
 
 ## Sensors at a glance (for design)
 
-Measured 2026-10-25 in one dim room. Paths, raw numbers and probe scripts: [probes/SENSORS.md](probes/SENSORS.md).
+Measured 2026-10-25 in one dim room. Paths, raw numbers and probe scripts: [probes/SENSORS.md](probes/SENSORS.md). How these feed the creature demo: [CREATURE.md](CREATURE.md).
 
 | Sensor | Gives | Speed | Good for | Watch out |
 |---|---|---|---|---|
