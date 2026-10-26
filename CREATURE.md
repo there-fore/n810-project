@@ -106,7 +106,7 @@ Starting numbers come from [probes/SENSORS.md](probes/SENSORS.md). Mic and light
 | Affordance | Read how | Detect when | Mote does |
 |---|---|---|---|
 | **Light covered** | Poll `lux` 3 times a second | First reading ≤ 2 → *drowsy* (eyes half-close, feels instant). Still ≤ 2 after 2 s → *asleep* | Sleeps. While awake for 20 s or more, falling asleep triggers the goodnight line first |
-| **Light uncovered** | Same | 2 readings in a row ≥ 5 (about 0.8 s) | Wakes (wake line) |
+| **Light uncovered** | Same | First reading ≥ 5: eyes start opening at once (1 s). Dark again during that second → back to sleep. (Waiting for 2 readings made it wake 2–4 s late.) | Wakes (wake line) |
 | **Light, after a slide** | — | Ignore light changes for 1.5 s after the keyboard moves, because opening it tilts the device | — |
 | **Poke** | pygame mouse events | Down and up within 0.3 s, moved less than 10 px | Flinch + "eep". 3 or more in 5 s → annoyed face, trust −1 |
 | **Pet** | Same | Finger down on Mote and moved 15 px or more | Leans in, purr, trust rises |
@@ -154,9 +154,27 @@ The mic runs from start to end (it takes about 1 s to start).
 Each step ends with a test Rose can do on the device in a visible terminal, with timed prompts. Nothing gets installed or changed on the N810 or onode without her OK.
 
 1. **Smallest loop: a blob that sleeps when the light is covered.** No network, no touch, no sound. First check that pygame can open full screen on the N810's display from an SSH session (`DISPLAY=:0`, as `user`). Then draw Mote breathing and blinking, poll `lux` at 3 Hz, and use the drowsy / asleep / wake thresholds above. Test: cover and uncover 5 times; it should go drowsy at once, sleep after about 2 s and wake within about 1 s, every time.
+   **Done 2026-10-25** ([mote/mote.py](mote/mote.py)): see [Step 1 results](#step-1-results-2026-10-25) below.
 2. **Touch:** poke, pet and hold, with trust and the mood bands. Show trust in a small debug corner.
 3. **Keyboard door:** the outside room, plus the 1.5 s light-ignore window.
 4. **Mic:** baseline, clap startle and hide, chirps, and the 300 ms mute after each chirp.
 5. **Mind, text only:** write `mote-mind` on onode (with Rose's OK), the open SSH connection, the wake and mood lines, the thought bubble, the 4 s timeout and fallback lines.
 6. **Voice:** listening detection, sending the recording, the reply.
 7. **Rehearse:** run the script 3 times end to end, measure memory and CPU, log the mic and light levels, and retune the thresholds in the demo room.
+
+## Step 1 results (2026-10-25)
+
+[mote/mote.py](mote/mote.py) draws Mote breathing and blinking and follows the light sensor. Run it from the laptop:
+
+```
+scp mote/mote.py mote/run-mote.sh n810:/tmp/
+ssh -t n810 sh /tmp/run-mote.sh test
+```
+
+`test` shows timed COVER / UNCOVER prompts at the top-left of the N810's screen (the terminal shows them 1–2 s late) and prints a summary. Without `test` it runs until the top-right corner is tapped; a number (e.g. `20`) quits after that many seconds. `run-mote.sh` starts it as `user` on the N810's screen (`DISPLAY=:0`; the display needs no key).
+
+- **Display:** pygame opens full screen on the N810 from an SSH session (checked by Rose).
+- **Light, 5 rounds** (seconds after each prompt, including Rose's reaction): drowsy 0.8–1.9 s, asleep 3.0–4.0 s, eyes open 0.8–1.2 s, fully awake 1.8–2.2 s. Every round worked.
+- **Sensor timing:** covering takes lux from about 9 to 0 in 0.3–0.4 s; uncovering usually jumps from 0 to 7–10 in one reading, once via 1 first (0.7 s).
+- **Speed:** a steady 25 frames per second. Python uses about 35–50% of the processor (`top`: 35% awake), the screen server (Xomap) about 6%. Drawing takes 5–8 ms per frame, redrawing only Mote's area cut little, so most of the cost is elsewhere (probably pygame's frame wait). To do before the mic step: try 15 frames per second, and less while asleep.
+- **Memory:** about 6.5 MB resident. The web browser's background process (`browserd`) was also running.
