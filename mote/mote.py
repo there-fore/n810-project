@@ -1,12 +1,14 @@
 # Mote, the October creature demo (Python 2.5 + pygame 1.7.1 on the N810).
-# Build steps 1-2: a blob that breathes and blinks, sleeps when the light
-# sensor is covered, and feels touch (poke, pet, hold) with trust and moods.
+# Build steps 1-3: a blob that breathes and blinks, sleeps when the light
+# sensor is covered, feels touch (poke, pet, hold) with trust and moods, and
+# peeks into the outside room when the keyboard (the door) slides out.
 # Thresholds are from CREATURE.md ("Affordance -> behaviour").
-# Usage (on the N810, as user):  DISPLAY=:0 python2.5 mote.py [test|touch] [raw] [secs]
+# Usage (on the N810, as user):  DISPLAY=:0 python2.5 mote.py [test|touch|door] [raw] [secs]
 #   test  = timed COVER / UNCOVER prompts, then a summary of reaction times
 #   touch = timed POKE / PET / HOLD prompts, then a summary of what Mote felt
 #   annoy = timed prompts to poke Mote fast, twice (checks the annoyed look)
 #   hold  = timed prompts to hold Mote, then pet and hold (checks the held look)
+#   door  = timed prompts to slide the keyboard out and in, then a summary
 #   raw   = log every touch event pygame delivers
 #   secs  = quit after this many seconds (default: run until the top-right
 #           corner is tapped, or Esc / q is pressed)
@@ -16,10 +18,24 @@ from pygame.locals import *
 
 LUX_PATH = '/sys/devices/platform/i2c_omap.2/i2c-0/0-0029/lux'
 LUX_EVERY = 1 / 3.0        # poll light 3 times a second
-DARK = 2                   # lux at or below this counts as covered
-BRIGHT = 5                 # lux at or above this counts as uncovered
+DARK = 2                   # lux at or below this always counts as covered
+BRIGHT = 5                 # lux at or above this can count as uncovered
+# Covered and uncovered follow the room: a hand over the sensor in a bright
+# room still lets ~7 lux through (108 lux room, 2026-10-28).
+ROOM_WINDOW = 10.0         # s: the room's level = brightest uncovered reading this recent
+DARK_SHARE = 0.15          # covered = at or below this share of the room's level
+BRIGHT_SHARE = 0.3         # uncovered = at or above this share of it
 SLEEP_AFTER = 2.0          # covered this long (after drowsy) -> asleep
 WAKE_ANIM = 1.0            # eyes take this long to open; dark again -> asleep
+
+SLIDE_PATH = '/sys/devices/platform/gpio-switch/slide/state'
+SLIDE_EVERY = 0.1          # poll the keyboard slide 10 times a second
+LIGHT_IGNORE = 1.5         # s: ignore light after the keyboard moves (it tilts the device)
+OUTSIDE_BRIGHT = 30        # settled lux at or above this -> "saw outside (bright)"
+DOOR_TRUST = 2             # seeing outside is what Mote wants most
+DOOR_WIPE = 0.6            # s: the door slides open / shut on screen
+PEEK_TIME = 3.0            # s: Mote looks around the outside room
+MEMORIES = 8               # remember the last this many events
 
 POKE_TIME = 0.6            # down and up within this, and still -> poke (taps: 0.05-0.55 s)
 STILL = 20                 # px: moved less than this from where it went down
@@ -47,7 +63,7 @@ FPS_AWAKE = 20
 FPS_ASLEEP = 10
 QUIT_BOX = Rect(W - 80, 0, 80, 80)
 PROMPT_AREA = Rect(0, 0, W, 60)
-DEBUG_AREA = Rect(0, H - 40, 560, 40)
+DEBUG_AREA = Rect(0, H - 40, 680, 40)
 
 BG_AWAKE = (40, 52, 78)
 BG_ASLEEP = (14, 16, 30)
@@ -73,15 +89,28 @@ def log(msg):
 def note(name):
     EVENTS.append((now(), name))
 
-def read_lux():
+def read_file(path):
     try:
-        f = open(LUX_PATH)
+        f = open(path)
         try:
-            return int(float(f.read().strip()))
+            return f.read().strip()
         finally:
             f.close()
-    except (IOError, ValueError):
+    except IOError:
         return None
+
+def read_lux():
+    try:
+        return int(float(read_file(LUX_PATH)))
+    except (TypeError, ValueError):
+        return None
+
+def read_slide():
+    # 'open' or 'closed' (None if unreadable)
+    s = read_file(SLIDE_PATH)
+    if s in ('open', 'closed'):
+        return s
+    return None
 
 def mix(a, b, k):
     return tuple([int(a[i] + (b[i] - a[i]) * k) for i in range(3)])
@@ -91,6 +120,62 @@ def draw_heart(screen, x, y, s, color):
     pygame.draw.circle(screen, color, (x - s / 2, y), s / 2 + 1)
     pygame.draw.circle(screen, color, (x + s / 2, y), s / 2 + 1)
     pygame.draw.polygon(screen, color, [(x - s, y + 1), (x + s, y + 1), (x, y + s * 13 / 10)])
+
+ROOM_LEVELS = 4            # the outside room, drawn at 4 darknesses (awake .. asleep)
+WALL = (104, 88, 84)
+FLOOR = (92, 66, 48)
+FLOOR_LINE = (74, 52, 38)
+SKIRTING = (70, 56, 52)
+RUG = (124, 82, 92)
+FRAME = (210, 196, 172)
+SKY = (150, 200, 236)
+NIGHT_SKY = (24, 30, 64)
+SUN = (252, 228, 130)
+MOON = (230, 230, 200)
+CLOUD = (240, 244, 250)
+LEAF = (90, 150, 90)
+POT = (180, 100, 70)
+LAMP = (240, 210, 150)
+POLE = (60, 50, 50)
+
+def draw_room(surf, dark):
+    # the outside room as Mote sees it: wall, floor, window, picture, plant,
+    # lamp. dark = 0 (awake) .. 1 (asleep) dims it toward the sleep colour.
+    def c(col):
+        return mix(col, BG_ASLEEP, dark * 0.85)
+    surf.fill(c(WALL))
+    pygame.draw.rect(surf, c(FLOOR), Rect(0, 360, W, H - 360))
+    for x in range(-40, W + 120, 130):                   # floorboards
+        pygame.draw.line(surf, c(FLOOR_LINE), (x, 363), (x - 60, H), 2)
+    pygame.draw.line(surf, c(SKIRTING), (0, 360), (W, 360), 6)
+    pygame.draw.ellipse(surf, c(RUG), Rect(W / 2 - 220, 380, 440, 70))
+    # window with sun and a cloud, or the moon once it is dark
+    win = Rect(80, 90, 210, 170)
+    pygame.draw.rect(surf, c(FRAME), win.inflate(16, 16))
+    pygame.draw.rect(surf, mix(SKY, NIGHT_SKY, dark), win)
+    if dark < 0.5:
+        pygame.draw.circle(surf, c(SUN), (win.right - 50, win.top + 45), 24)
+        for dx, dy, r in ((50, 100, 18), (72, 92, 22), (96, 102, 16)):
+            pygame.draw.circle(surf, c(CLOUD), (win.left + dx, win.top + dy), r)
+    else:
+        pygame.draw.circle(surf, c(MOON), (win.right - 50, win.top + 45), 18)
+    pygame.draw.line(surf, c(FRAME), (win.centerx, win.top), (win.centerx, win.bottom), 6)
+    pygame.draw.line(surf, c(FRAME), (win.left, win.centery), (win.right, win.centery), 6)
+    pygame.draw.rect(surf, c(FRAME), Rect(win.left - 16, win.bottom + 8, win.width + 32, 10))
+    # a picture of a mountain
+    pic = Rect(370, 110, 100, 76)
+    pygame.draw.rect(surf, c(FRAME), pic.inflate(12, 12))
+    pygame.draw.rect(surf, c(SKY), pic)
+    pygame.draw.polygon(surf, c(LEAF), [(pic.left, pic.bottom), (pic.left + 40, pic.top + 20),
+                                        (pic.left + 70, pic.bottom - 20), (pic.right, pic.bottom)])
+    # plant in a pot, left
+    pygame.draw.polygon(surf, c(POT), [(110, 300), (190, 300), (178, 360), (122, 360)])
+    for dx, dy, w, h in ((-40, -60, 40, 70), (0, -90, 34, 90), (30, -55, 40, 62)):
+        pygame.draw.ellipse(surf, c(LEAF), Rect(150 + dx - w / 2, 300 + dy, w, h))
+    # floor lamp, right
+    pygame.draw.line(surf, c(POLE), (660, 180), (660, 352), 5)
+    pygame.draw.ellipse(surf, c(POLE), Rect(630, 346, 60, 14))
+    pygame.draw.polygon(surf, c(LAMP), [(620, 182), (700, 182), (680, 128), (640, 128)])
 
 def dist(a, b):
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
@@ -185,6 +270,7 @@ class Mote:
         self.since = now()
         self.dark_since = None
         self.bright_since = None
+        self.room = []             # (time, lux) of recent uncovered readings
         self.next_blink = now() + 2
         self.blink_until = 0
         self.trust = TRUST_START
@@ -203,6 +289,12 @@ class Mote:
         self.last_t = now()
         self.body = None
         self.color = BODY
+        self.door = False          # keyboard out: the outside room shows
+        self.door_t = -10.0        # when the keyboard last moved
+        self.light_quiet_until = 0 # ignore light until then (the slide tilts it)
+        self.ignored = []          # lux readings ignored since the slide moved
+        self.outside_pending = False   # note what it saw once the light settles
+        self.memories = []         # (time, text), the last MEMORIES events
 
     def mood(self):
         for top, name in MOODS:
@@ -237,15 +329,86 @@ class Mote:
         return self.body is not None \
             and self.body.inflate(2 * MARGIN, 2 * MARGIN).collidepoint(pos)
 
+    def remember(self, text):
+        self.memories = (self.memories + [(now(), text)])[-MEMORIES:]
+        log('memory: %s (%d kept)' % (text, len(self.memories)))
+
+    def feel_slide(self, state, first=False):
+        # state is 'open' or 'closed'; first = the reading at startup
+        if state is None or (state == 'open') == self.door:
+            return
+        t = now()
+        self.door = state == 'open'
+        if first:
+            self.door_t = t - DOOR_WIPE                  # no wipe, no trust
+            log('keyboard already %s' % state)
+            return
+        self.door_t = t
+        self.light_quiet_until = t + LIGHT_IGNORE
+        log('keyboard %s (light ignored for %.1f s)' % (state, LIGHT_IGNORE))
+        note('door ' + state)
+        if self.door and self.state == 'asleep':
+            log('door opened while asleep: Mote does not see it')
+        elif self.door:
+            self.set_expr('peek', PEEK_TIME)
+            self.felt = 'saw outside'
+            self.change_trust(DOOR_TRUST, 'door opened')
+            self.outside_pending = True
+        else:
+            if self.outside_pending:
+                log('door closed before the light settled: nothing remembered')
+            self.outside_pending = False
+            if self.expr == 'peek':
+                self.set_expr(None)
+            if self.state != 'asleep':
+                self.felt = 'back inside'
+
+    def door_k(self):
+        # how far the door is open on screen: 0 = inside .. 1 = the outside room
+        k = (now() - self.door_t) / DOOR_WIPE
+        if self.door:
+            return min(1.0, k)
+        return max(0.0, 1.0 - k)
+
+    def room_level(self):
+        if not self.room:
+            return 0
+        return max([l for _, l in self.room])
+
+    def light_limits(self):
+        # (covered at or below, uncovered at or above), from the room's level
+        room = self.room_level()
+        return max(DARK, int(room * DARK_SHARE)), max(BRIGHT, int(room * BRIGHT_SHARE))
+
     def feel_light(self, lux):
         t = now()
         if lux is None:
             return
-        if lux <= DARK:
+        if t < self.light_quiet_until:
+            self.ignored.append(lux)
+            return
+        if self.ignored:
+            msg = 'light ignored: %d readings, lux %d-%d' % (len(self.ignored),
+                min(self.ignored), max(self.ignored))
+            log(msg)
+            note(msg)
+            self.ignored = []
+        if self.outside_pending:
+            self.outside_pending = False
+            kind = lux >= OUTSIDE_BRIGHT and 'bright' or 'dim'
+            self.remember('saw outside (%s)' % kind)
+            note('saw outside %s (lux %d)' % (kind, lux))
+        dark, bright = self.light_limits()
+        if lux > dark:
+            # the room's level; while covered, the last one is kept
+            self.room = [(s, l) for s, l in self.room if t - s < ROOM_WINDOW] + [(t, lux)]
+        if lux <= dark:
+            if self.dark_since is None:
+                log('covered: lux %d <= %d (room %d)' % (lux, dark, self.room_level()))
             self.bright_since = None
             if self.dark_since is None:
                 self.dark_since = t
-        elif lux >= BRIGHT:
+        elif lux >= bright:
             self.dark_since = None
             if self.bright_since is None:
                 self.bright_since = t
@@ -350,22 +513,28 @@ class Mote:
             return 1.0
         if self.expr == 'annoyed':
             return 0.45
-        if self.expr == 'notice':
+        if self.expr in ('notice', 'peek'):
             return 0.0
         if self.mood() == 'timid':
             return 0.35
         return 0.0
 
-    def background(self):
+    def darkness(self):
+        # 0 = awake .. 1 = asleep, for the background
         t = now()
-        dark = 0.0
         if self.state == 'asleep':
-            dark = min(1.0, (t - self.since) / 1.5)
+            return min(1.0, (t - self.since) / 1.5)
         elif self.state == 'drowsy':
-            dark = 0.4
+            return 0.4
         elif self.state == 'waking':
-            dark = max(0.0, 1.0 - (t - self.since) / WAKE_ANIM)
-        return mix(BG_AWAKE, BG_ASLEEP, dark)
+            return max(0.0, 1.0 - (t - self.since) / WAKE_ANIM)
+        return 0.0
+
+    def background(self):
+        # the inside colour; in the outside room, roughly the wall's
+        if self.door:
+            return mix(WALL, BG_ASLEEP, self.darkness() * 0.85)
+        return mix(BG_AWAKE, BG_ASLEEP, self.darkness())
 
     def draw(self, screen):
         # draws Mote (not the background); returns the area it covered
@@ -387,6 +556,8 @@ class Mote:
             stretch = math.sin((t - self.since) / WAKE_ANIM * math.pi) * 30
         if self.expr == 'flinch':
             squash = 25 * max(0.0, self.expr_until - t) / 0.4
+        if self.expr == 'peek':                          # rises, tall and alert
+            stretch = 18 * min(1.0, (t - self.expr_since) / 0.4)
         bw = int((bw * (1 + depth * breath) - stretch * 0.5 + squash) * self.scale)
         bh = int((bh * (1 - depth * breath) + stretch - squash) * self.scale)
         if self.mood() == 'fond' and self.state == 'awake' and not calm:
@@ -442,6 +613,10 @@ class Mote:
         r = 15
         if self.expr == 'notice':
             r = 17                                       # eyes widen
+        elif self.expr == 'peek':                        # wide, looking around
+            r = 17
+            k = now() - self.expr_since
+            look = (int(7 * math.sin(k * 2 * math.pi / 1.5)), -3)
         for side, ex in ((-1, cx - bw / 5), (1, cx + bw / 5)):
             if self.expr == 'happy':                     # ^ ^
                 pygame.draw.lines(screen, EYE, 0,
@@ -509,6 +684,43 @@ def touch_schedule(tries):
     return steps
 
 
+def door_schedule():
+    steps = [(0, 'Get ready: keyboard IN, light sensor uncovered', None)]
+    t = 6
+    for i in range(1, 4):
+        steps.append((t, 'Round %d of 4: SLIDE the keyboard OUT in 3...' % i, None))
+        steps.append((t + 3, 'SLIDE the keyboard OUT now, then watch Mote',
+                      'try out %d (expect: door open, trust +2, saw outside)' % i))
+        steps.append((t + 10, 'Get ready to slide it back IN in 3...', None))
+        steps.append((t + 13, 'SLIDE the keyboard back IN now',
+                      'try in %d (expect: door closed)' % i))
+        t += 19
+    # last round: fall asleep and wake up in the outside room
+    steps.append((t, 'Round 4 of 4: SLIDE the keyboard OUT in 3...', None))
+    steps.append((t + 3, 'SLIDE the keyboard OUT now', 'try out 4 (expect: door open)'))
+    steps.append((t + 7, 'Keep it out. COVER the light sensor in 3...', None))
+    steps.append((t + 10, 'COVER the light sensor now (keep it covered)',
+                  'try cover (expect: drowsy, asleep, the room dims)'))
+    steps.append((t + 15, 'Get ready to UNCOVER in 3...', None))
+    steps.append((t + 18, 'UNCOVER now', 'try uncover (expect: waking, awake)'))
+    steps.append((t + 22, 'Get ready to slide it back IN in 3...', None))
+    steps.append((t + 25, 'SLIDE the keyboard back IN now', 'try in 4 (expect: door closed)'))
+    steps.append((t + 31, 'Done', 'done'))
+    return steps
+
+
+def door_summary(mote):
+    log('--- door summary (seconds after each prompt) ---')
+    marks = [i for i in range(len(EVENTS))
+             if EVENTS[i][1].startswith('try ') or EVENTS[i][1] == 'done']
+    for a, b in zip(marks, marks[1:]):
+        t0 = EVENTS[a][0]
+        got = ['%s +%.1f' % (n, t - t0) for t, n in EVENTS[a + 1:b]]
+        log('%s\n         %s' % (EVENTS[a][1][4:], ', '.join(got) or 'nothing'))
+    log('trust now %d (%s); memories: %s' % (mote.trust, mote.mood(),
+        '; '.join([m for _, m in mote.memories]) or 'none'))
+
+
 def light_summary():
     log('--- summary (seconds after each prompt) ---')
     rounds = 0
@@ -561,7 +773,7 @@ def main():
     for a in args:
         if a.isdigit():
             limit = int(a)
-        elif a in ('test', 'touch', 'annoy', 'hold'):
+        elif a in ('test', 'touch', 'annoy', 'hold', 'door'):
             mode = a
     raw = 'raw' in args            # log every touch event pygame delivers
 
@@ -575,9 +787,16 @@ def main():
         log('no font: %s' % e)
         FONT = SMALL = None
     clock = pygame.time.Clock()
+    # the outside room is drawn once per darkness level, then only copied
+    rooms = []
+    for i in range(ROOM_LEVELS):
+        room = pygame.Surface((W, H)).convert()
+        draw_room(room, i / float(ROOM_LEVELS - 1))
+        rooms.append(room)
     mote = Mote()
     touch = Touch()
     log('started, lux=%s, mode %s' % (read_lux(), mode or 'free run'))
+    mote.feel_slide(read_slide(), True)
 
     steps = []
     if mode == 'test':
@@ -588,11 +807,13 @@ def main():
         steps = touch_schedule(HOLD_TRIES)
     elif mode == 'annoy':
         steps = touch_schedule(ANNOY_TRIES)
+    elif mode == 'door':
+        steps = door_schedule()
     if steps and limit is None:
         limit = steps[-1][0] + 1
     prompt = ''
-    next_lux = 0
-    last_lux = last_bg = last_prompt = last_debug = last_area = None
+    next_lux = next_slide = 0
+    last_lux = last_scene = last_prompt = last_debug = last_area = None
     frames, fps_t0, cpu0 = 0, now(), time.clock()
     running = True
     while running:
@@ -604,6 +825,9 @@ def main():
                     ev.pos, mote.hit(ev.pos)))
             if ev.type == QUIT:
                 running = False
+            elif ev.type == KEYDOWN and mode == 'door':
+                # the keyboard is out and held: keys must not end the test
+                log('key %s pressed (ignored)' % pygame.key.name(ev.key))
             elif ev.type == KEYDOWN and ev.key in (K_ESCAPE, K_q):
                 running = False
             elif ev.type == MOUSEBUTTONDOWN:
@@ -627,44 +851,76 @@ def main():
             if name:
                 note(name)
 
+        if t >= next_slide:
+            next_slide = t + SLIDE_EVERY
+            mote.feel_slide(read_slide())
         if t >= next_lux:
             next_lux = t + LUX_EVERY
             lux = read_lux()
-            if mode == 'test' and lux != last_lux:
+            if mode in ('test', 'door') and lux != last_lux:
                 log('lux %s -> %s' % (last_lux, lux))
             last_lux = lux
             mote.feel_light(lux)
         mote.update(touch.take_stroked())
 
         # redraw only what changed: Mote's old and new area, the prompt and
-        # the debug corner; the whole screen while the background fades
+        # the debug corner. The whole screen while the background fades or
+        # the door slides; the outside room changes in 4 steps as it dims.
         bg = mote.background()
+        k = mote.door_k()
+        level = int(round(mote.darkness() * (ROOM_LEVELS - 1)))
+        if k >= 1:
+            scene = ('room', level)
+        elif k > 0:
+            scene = ('door', bg, level, k)
+        else:
+            scene = ('inside', bg)
+        room = rooms[level]
+
+        def paint(rect):
+            if k >= 1:
+                rect = rect.clip(screen.get_rect())
+                screen.blit(room, rect, rect)
+            else:
+                screen.fill(bg, rect)
+
         debug = 'trust %d  %s   felt: %s' % (mote.trust, mote.mood(), mote.felt)
-        if bg != last_bg:
-            screen.fill(bg)
+        if mote.door:
+            debug += '   door open'
+        if scene != last_scene:
+            if k >= 1:
+                screen.blit(room, (0, 0))
+            else:
+                screen.fill(bg)
+                if k > 0:                                # the door, part open
+                    w = int(W * k)
+                    r = Rect((W - w) / 2, 0, w, H)
+                    screen.blit(room, r, r)
+                    pygame.draw.line(screen, FRAME, r.topleft, r.bottomleft, 4)
+                    pygame.draw.line(screen, FRAME, r.topright, r.bottomright, 4)
             area = mote.draw(screen)
             dirty = None
         else:
-            screen.fill(bg, last_area)
+            paint(last_area)
             area = mote.draw(screen)
             dirty = [area.union(last_area)]
         if dirty is None or prompt != last_prompt:
-            screen.fill(bg, PROMPT_AREA)
+            if dirty is not None:
+                paint(PROMPT_AREA)
+                dirty.append(PROMPT_AREA)
             if prompt and SMALL:
                 screen.blit(SMALL.render(prompt, 1, TEXT), (20, 20))
-            if dirty is not None:
-                dirty.append(PROMPT_AREA)
         if dirty is None or debug != last_debug:
-            screen.fill(bg, DEBUG_AREA)
+            if dirty is not None:
+                paint(DEBUG_AREA)
+                dirty.append(DEBUG_AREA)
             if SMALL:
                 screen.blit(SMALL.render(debug, 1, DIM_TEXT), (20, H - 32))
-            if dirty is not None:
-                dirty.append(DEBUG_AREA)
         if dirty is None:
             pygame.display.flip()
         else:
             pygame.display.update(dirty)
-        last_bg, last_prompt, last_debug, last_area = bg, prompt, debug, area
+        last_scene, last_prompt, last_debug, last_area = scene, prompt, debug, area
 
         if mote.state == 'asleep':
             clock.tick(FPS_ASLEEP)
@@ -681,6 +937,8 @@ def main():
         light_summary()
     elif mode in ('touch', 'annoy', 'hold'):
         touch_summary(touch, mote)
+    elif mode == 'door':
+        door_summary(mote)
     pygame.quit()
     log('stopped')
 

@@ -105,8 +105,8 @@ Starting numbers come from [probes/SENSORS.md](probes/SENSORS.md). Mic and light
 
 | Affordance | Read how | Detect when | Mote does |
 |---|---|---|---|
-| **Light covered** | Poll `lux` 3 times a second | First reading ≤ 2 → *drowsy* (eyes half-close, feels instant). Still ≤ 2 after 2 s → *asleep* | Sleeps. While awake for 20 s or more, falling asleep triggers the goodnight line first |
-| **Light uncovered** | Same | First reading ≥ 5: eyes start opening at once (1 s). Dark again during that second → back to sleep. (Waiting for 2 readings made it wake 2–4 s late.) | Wakes (wake line) |
+| **Light covered** | Poll `lux` 3 times a second; the room's level = the brightest uncovered reading in the last 10 s (kept while covered) | First reading ≤ 15% of the room's level (at least 2) → *drowsy* (eyes half-close, feels instant). Still covered after 2 s → *asleep*. (Was a fixed 2 lux until step 3: a hand in a 108 lux room let 7–10 lux through.) | Sleeps. While awake for 20 s or more, falling asleep triggers the goodnight line first |
+| **Light uncovered** | Same | First reading ≥ 30% of the room's level (at least 5): eyes start opening at once (1 s). Dark again during that second → back to sleep. (Waiting for 2 readings made it wake 2–4 s late.) | Wakes (wake line) |
 | **Light, after a slide** | — | Ignore light changes for 1.5 s after the keyboard moves, because opening it tilts the device | — |
 | **Poke** | pygame mouse events | Down and up within 0.6 s, moved less than 20 px (measured taps: 0.05–0.55 s, drifting up to 18 px) | Squints `> <` and squashes. 3 or more in 5 s → annoyed for 2 s (shakes, turns reddish, thick frown), trust −1 |
 | **Pet** | Same | Finger down on Mote and moved 25 px within the first 0.6 s, or 60 px at any time | Smiles `^ ^`, blushes, leans toward the finger; trust rises |
@@ -159,6 +159,7 @@ Each step ends with a test Rose can do on the device in a visible terminal, with
 2. **Touch:** poke, pet and hold, with trust and the mood bands. Show trust in a small debug corner.
    **Done 2026-10-25**: see [Step 2 results](#step-2-results-2026-10-25) below.
 3. **Keyboard door:** the outside room, plus the 1.5 s light-ignore window.
+   **Done 2026-10-28**: see [Step 3 results](#step-3-results-2026-10-28) below.
 4. **Mic:** baseline, clap startle and hide, chirps, and the 300 ms mute after each chirp.
 5. **Mind, text only:** write `mote-mind` on onode (with Rose's OK), the open SSH connection, the wake and mood lines, the thought bubble, the 4 s timeout and fallback lines.
 6. **Voice:** listening detection, sending the recording, the reply.
@@ -198,4 +199,22 @@ It prompts on the N810's screen: poke twice, pet, hold, then poke 4 times fast, 
 - **Not yet:** touch while asleep is ignored (the design doesn't say what it should do). Hiding (from a clap) comes with the mic step, so "hold ends a hide early" is untested.
 - **Hold gets its own look** (after the step 2 runs): held, Mote closes its eyes in a `u u` curve, settles lower and wider, breathes slower and deeper, and floats small hearts. Before this it used the petting smile, so a hold only stood out when it changed the mood (as in the 3rd touch run, 6 → 7, fond). Rose: "clear, keep it". Checked with `hold` mode (`ssh -t n810 sh /tmp/run-mote.sh hold`).
 - **Hold vs slow drift:** one hold drifted 28 px in its first second and was taken as a pet. Pet now needs 25 px within 0.6 s (or 60 px any time), and a hold allows drift. A pet that rests for 1 s becomes a hold. Last `hold` run: 2 of 2 holds felt (one after petting, with a lift in between). Petting and then resting without lifting is not tested yet.
-- **Light during the touch runs:** in one `hold` run the sensor read 2 lux and Mote fell asleep before the test began. Rose's hand was covering the sensor by accident, so the device was fine. The light thresholds are still fixed numbers (the design's "relative to the room's level" is not built), but nothing so far shows that is a problem.
+- **Light during the touch runs:** in one `hold` run the sensor read 2 lux and Mote fell asleep before the test began. Rose's hand was covering the sensor by accident, so the device was fine. The light thresholds were still fixed numbers then; step 3 made them follow the room.
+
+## Step 3 results (2026-10-28)
+
+[mote/mote.py](mote/mote.py) now has the keyboard door. Run the door test from the laptop (after copying the files over as in step 1):
+
+```
+ssh -t n810 sh /tmp/run-mote.sh door
+```
+
+It prompts on the N810's screen: slide the keyboard out and in 3 times, then out, cover and uncover the light sensor, and back in. It prints what happened after each prompt, trust and Mote's memories. Keys pressed while the keyboard is out are ignored, so they can't end the test.
+
+- **What the door does:** the screen wipes open (0.6 s) onto an outside room (window with sun or moon, a picture, a plant, a lamp, a rug), drawn once at 4 darknesses so it dims as Mote falls asleep. Mote rises and looks around for 3 s. Trust +2. Once the light settles, it remembers *saw outside (bright)* (≥ 30 lux) or *(dim)*; the last 8 memories are kept. Closing the keyboard wipes back inside. A door opened while asleep isn't seen.
+- **Run at school** (room about 80–140 lux, N810 on the laptop's hotspot), 2nd door run: all 4 opens (+1.0 to +2.0 s after the prompt, including Rose's reaction) and 4 closes (+1.2 to +1.8 s) felt. Trust 3 → 5 → 7 → 9 → 10 (fond). Four *saw outside (bright)* memories, at 74–90 lux.
+- **Light after a slide:** each slide moved the light by 20–50 lux. The 1.5 s window ignored 4–5 readings each time, and nothing woke or slept by mistake.
+- **Light thresholds now follow the room.** In the 1st door run, covering the sensor with the keyboard out only brought it to 7–10 lux, so the fixed 2 lux missed it and Mote stayed awake. Covered is now ≤ 15% of the room's level (at least 2), uncovered ≥ 30% (at least 5); in a dim room (step 1, about 9 lux) that is the same as before. Light test after the change, 5 rounds (cutoffs 12–20 lux): drowsy 1.1–2.2 s, asleep 3.2–4.3 s, eyes open 1.2–1.7 s, fully awake 2.3–2.8 s, all working. One cover read 11 lux first, which the old cutoff would have missed. 2nd door run, keyboard out: covered at 8 lux (cutoff 13, room 89), drowsy +2.3 s, asleep +4.4 s, awake again +2.6 s after uncovering.
+- **Speed:** 20 frames per second, about 20% of the processor, the same as step 2.
+- **Not yet:** the door line from the mind (step 5). How the room and the peek look on screen hasn't been reviewed by Rose yet; the runs only checked the log.
+- **The N810's clock** read 1970 again after a reboot. Mote doesn't need it.
