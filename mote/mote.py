@@ -1,10 +1,11 @@
 # Mote, the October creature demo (Python 2.5 + pygame 1.7.1 on the N810).
-# Build steps 1-4: a blob that breathes and blinks, sleeps when the light
+# Build steps 1-5: a blob that breathes and blinks, sleeps when the light
 # sensor is covered, feels touch (poke, pet, hold) with trust and moods,
-# peeks into the outside room when the keyboard (the door) slides out, and
-# hears claps (startles and hides) and chirps.
+# peeks into the outside room when the keyboard (the door) slides out,
+# hears claps (startles and hides), chirps, and says short lines that its
+# mind on onode writes (mote-mind) at the boundaries between moments.
 # Thresholds are from CREATURE.md ("Affordance -> behaviour").
-# Usage (on the N810, as user):  DISPLAY=:0 python2.5 mote.py [test|touch|door|clap] [raw] [secs]
+# Usage (on the N810, as user):  DISPLAY=:0 python2.5 mote.py [test|touch|door|clap|mind|...] [raw] [nomind] [secs]
 #   test  = timed COVER / UNCOVER prompts, then a summary of reaction times
 #   touch = timed POKE / PET / HOLD prompts, then a summary of what Mote felt
 #   annoy = timed prompts to poke Mote fast, twice (checks the annoyed look)
@@ -13,6 +14,8 @@
 #   clap  = timed prompts to clap, talk, hold and sleep, then a summary
 #   hide  = timed prompts to clap, then hold Mote while it hides (twice)
 #   show  = Mote is startled on cue 3 times (no clapping), to watch the look
+#   mind  = the demo script with the mind: wake, pet, clap, door, goodnight
+#   nomind = don't connect to the mind (fallback lines only)
 #   raw   = log every touch event pygame delivers
 #   secs  = quit after this many seconds (default: run until the top-right
 #           corner is tapped, or Esc / q is pressed)
@@ -62,6 +65,8 @@ HIDE_TIME = 3.0            # s: hides after a clap
 HIDE_FOND = 1.5            # s: a fond Mote recovers faster
 PEEK_OUT = 1.0             # s: peeks out after hiding
 STIR_TIME = 1.0            # s: a clap while asleep makes it stir
+SNAP_UNDO = 0.8            # s: a "clap" this soon before the keyboard moves was its snap
+SNAP_MUTE = 0.5            # s: ignore the mic this long after the keyboard moves
 
 SOUND_RATE = 22050
 CHIRP_MUTE = 0.3           # s: ignore the mic this long after a chirp ends
@@ -75,7 +80,33 @@ CHIRPS = {
     'yelp': [(0.2, 2600, 900, 0.8, 0)],
     'peek': [(0.07, 1300, 1500, 0.5, 0), (0.06, 0, 0, 0, 0), (0.08, 1500, 1900, 0.5, 0)],
     'wow':  [(0.3, 700, 1900, 0.6, 0)],
+    'say':  [(0.06, 1000, 1300, 0.5, 0), (0.04, 0, 0, 0, 0), (0.08, 1300, 1100, 0.5, 0)],
 }
+
+# The mind: one open `ssh onode2 mote-mind` (Gemma E2B on onode writes the lines)
+MIND_CMD = ['ssh', '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', 'onode2', 'mote-mind']
+MIND_WAIT = 4.0            # s: no line by then -> the fallback line
+MIND_GAP = 8.0             # s: unprompted lines at least this far apart
+MIND_RETRY = 15.0          # s: reconnect this long after the connection drops
+MIND_STALE = 8.0           # s: a wish not sent by then is out of date
+AWAKE_FOR_GOODNIGHT = 20.0 # s awake before covering -> goodnight line
+SAY_TIME = 4.0             # s a line stays up...
+SAY_PER_CHAR = 0.1         # ...plus this per character
+SAY_WIDTH = 460            # px: lines wrap at this width
+# fallback lines, so the whole script works without onode
+FALLBACK = {
+    'wake': "Oh! The dark is gone.",
+    'mood-curious': "You're not so scary.",
+    'mood-fond': "I like you. Stay close.",
+    'mood-timid': "I'll be small for a bit.",
+    'peekout': "Is the loud thing gone?",
+    'door-bright': "So much bright out there!",
+    'door-dim': "It's dim out there.",
+    'goodnight': "Goodnight. You stayed with me.",
+}
+BUBBLE = (246, 244, 234)
+BUBBLE_EDGE = (120, 110, 100)
+BUBBLE_TEXT = (40, 30, 30)
 
 POKE_TIME = 0.6            # down and up within this, and still -> poke (taps: 0.05-0.55 s)
 STILL = 20                 # px: moved less than this from where it went down
@@ -119,7 +150,9 @@ DIM_TEXT = (150, 160, 190)
 T0 = time.time()
 EVENTS = []                # (time, name) for the test summaries
 MIC = None                 # the Mic, once started
+MIND = None                # the Mind, once started
 SOUNDS = {}                # chirp name -> (pygame Sound, seconds)
+SAY_FONT = None
 
 def now():
     return time.time() - T0
@@ -459,6 +492,222 @@ def chirp(name):
         MIC.mute_until = max(MIC.mute_until, now() + secs + CHIRP_MUTE)
 
 
+class Mind:
+    # one SSH connection to mote-mind, kept open; one request at a time.
+    # Mote sets mote.wants; tick() sends it, and shows the line (or the
+    # fallback after MIND_WAIT) in a speech bubble.
+    def __init__(self, enabled):
+        self.enabled = enabled
+        self.proc = None
+        self.ready = False
+        self.lock = threading.Lock()
+        self.replies = []          # (time, line) from mote-mind, not yet handled
+        self.sent = []             # request numbers awaiting a reply, oldest first
+        self.seq = 0
+        self.asked = None          # (number, trigger, time) while thinking
+        self.said = None           # (text, trigger, until) while a line shows
+        self.last_said = -100.0
+        self.last_try = -100.0
+        self.connect_t = 0
+
+    def connect(self):
+        self.last_try = self.connect_t = now()
+        self.sent = []
+        try:
+            self.proc = subprocess.Popen(MIND_CMD, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=open('/dev/null', 'w'))
+        except OSError, e:
+            log('mind not started: %s' % e)
+            self.proc = None
+            return
+        th = threading.Thread(target=self.read, args=(self.proc,))
+        th.setDaemon(True)
+        th.start()
+        self.write('trigger=hello')
+
+    def read(self, proc):
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            line = line.rstrip('\n')
+            if line == 'ready':
+                self.ready = True
+                log('mind ready (%.1f s to connect)' % (now() - self.connect_t))
+                continue
+            self.lock.acquire()
+            try:
+                self.replies.append((now(), line))
+            finally:
+                self.lock.release()
+        if self.proc is proc:
+            self.ready = False
+            self.proc = None
+            log('mind connection closed')
+
+    def write(self, text):
+        try:
+            self.proc.stdin.write(text + '\n')
+            self.proc.stdin.flush()
+            return True
+        except (IOError, OSError, AttributeError), e:
+            log('mind: cannot send (%s)' % e)
+            return False
+
+    def stop(self):
+        proc, self.proc = self.proc, None
+        if proc:
+            try:
+                proc.stdin.close()
+                os.kill(proc.pid, signal.SIGTERM)
+            except (IOError, OSError):
+                pass
+
+    def status(self):
+        if not self.enabled:
+            return 'off'
+        if self.asked:
+            return 'thinking'
+        return self.ready and 'ready' or 'connecting'
+
+    def tick(self, mote):
+        t = now()
+        if self.enabled and self.proc is None and t - self.last_try >= MIND_RETRY:
+            self.connect()
+        self.lock.acquire()
+        try:
+            got, self.replies = self.replies, []
+        finally:
+            self.lock.release()
+        for at, line in got:
+            if not self.sent:
+                continue
+            n = self.sent.pop(0)
+            if not self.asked or self.asked[0] != n:
+                log('mind: late line dropped: %s' % line)
+                continue
+            n, trig, t0 = self.asked
+            self.asked = None
+            if line.startswith('line=') and line[5:].strip():
+                text = line[5:].strip()
+                if trig == 'goodnight' and 'night' not in text.lower():
+                    text += ' Goodnight.'
+                self.say(text, trig, 'mind %.1f s' % (at - t0))
+            else:
+                log('mind: %s' % line)
+                self.say(FALLBACK[trig], trig, 'fallback, mind error')
+        if self.asked and t - self.asked[2] >= MIND_WAIT:
+            n, trig = self.asked[:2]
+            self.asked = None
+            if n is None:
+                self.say(FALLBACK[trig], trig, 'fallback, no mind')
+            else:
+                self.say(FALLBACK[trig], trig, 'fallback, no line in %.0f s' % MIND_WAIT)
+        if self.said and t >= self.said[2]:
+            self.said = None
+        trig = mote.wants
+        if trig and not self.asked:
+            if mote.state == 'asleep' and trig != 'goodnight':
+                log('mind: %s dropped (asleep)' % trig)
+                mote.wants = None
+            elif t - mote.wants_t > MIND_STALE:
+                log('mind: %s dropped (out of date)' % trig)
+                mote.wants = None
+            elif trig == 'goodnight' or t - self.last_said >= MIND_GAP:
+                mote.wants = None
+                self.ask(trig, mote)
+
+    def ask(self, trig, mote):
+        self.seq += 1
+        note('ask ' + trig)
+        req = 'trigger=%s\tmood=%s\ttrust=%d\tmemories=%s' % (
+            trig, mote.mood(), mote.trust, mote.memory_text())
+        if self.ready and self.write(req):
+            self.sent.append(self.seq)
+            self.asked = (self.seq, trig, now())
+            log('mind: asked %s' % trig)
+        else:
+            # no mind: think for a second, then the fallback line
+            self.asked = (None, trig, now() - MIND_WAIT + 1.0)
+            log('mind: %s, not asked (%s)' % (trig, self.status()))
+
+    def say(self, text, trig, source):
+        t = now()
+        self.said = (text, trig, t + SAY_TIME + SAY_PER_CHAR * len(text))
+        self.last_said = t
+        chirp('say')
+        log('says (%s, %s): %s' % (trig, source, text))
+        note('says %s (%s)' % (trig, source.split(',')[0]))
+
+
+def wrap(text, font, width):
+    lines, cur = [], ''
+    for word in text.split():
+        trial = cur and cur + ' ' + word or word
+        if cur and font.size(trial)[0] > width:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+BUBBLE_KEY = (255, 0, 255)  # see-through colour of a bubble image
+
+def bubble_key(mind):
+    # what the bubble shows; it is only redrawn when this changes
+    if mind.said:
+        return ('say', mind.said[0])
+    if mind.asked:
+        return ('think', int(now() * 3) % 3)             # the dots take turns
+    return None
+
+
+def make_bubble(key, mote, where):
+    # draws a bubble once into its own image: returns (rect on screen, image).
+    # where = (x, top of Mote) when the bubble first appeared; it stays there.
+    mx, top = where
+    if key[0] == 'say':
+        lines = [SAY_FONT.render(l, 1, BUBBLE_TEXT, BUBBLE)
+                 for l in wrap(key[1], SAY_FONT, SAY_WIDTH)]
+        lh = SAY_FONT.get_linesize()
+        w = max([l.get_width() for l in lines]) + 36
+        h = lh * len(lines) + 24
+        tail = 30                                        # clear of Mote's head
+        x = max(10, min(W - w - 10, mx - w / 2))
+        y = max(66, top - 40 - tail - h)
+        img = pygame.Surface((w, h + tail)).convert()
+        img.fill(BUBBLE_KEY)
+        tx = mx - x                                      # tail, pointing at Mote
+        tx = max(20, min(w - 20, tx))
+        pts = [(tx - 14, h - 2), (tx + 14, h - 2), (tx, h + tail - 1)]
+        pygame.draw.polygon(img, BUBBLE, pts)
+        pygame.draw.lines(img, BUBBLE_EDGE, 0, [pts[0], pts[2], pts[1]], 2)
+        pygame.draw.rect(img, BUBBLE, Rect(0, 0, w, h))
+        pygame.draw.rect(img, BUBBLE_EDGE, Rect(0, 0, w, h), 2)
+        pygame.draw.line(img, BUBBLE, pts[0], pts[1], 2)
+        for i, l in enumerate(lines):
+            img.blit(l, (18, 12 + i * lh))
+    else:
+        img = pygame.Surface((120, 110)).convert()
+        img.fill(BUBBLE_KEY)
+        cloud = Rect(5, 5, 110, 60)
+        for r, cx, cy in ((7, 15, 100), (11, 30, 82)):  # trail toward Mote
+            pygame.draw.circle(img, BUBBLE, (cx, cy), r)
+        pygame.draw.ellipse(img, BUBBLE, cloud)
+        pygame.draw.ellipse(img, BUBBLE_EDGE, cloud, 2)
+        for i in range(3):
+            on = key[1] == i
+            pygame.draw.circle(img, on and BUBBLE_TEXT or BUBBLE_EDGE,
+                               (36 + 24 * i, 35), on and 7 or 5)
+        x = min(W - 125, mx + 90)
+        y = max(66, top - 120)
+    img.set_colorkey(BUBBLE_KEY)
+    return Rect((x, y), img.get_size()), img
+
+
 class Mote:
     def __init__(self):
         self.state = 'awake'       # awake, drowsy, asleep, waking
@@ -491,20 +740,39 @@ class Mote:
         self.outside_pending = False   # note what it saw once the light settles
         self.memories = []         # (time, text), the last MEMORIES events
         self.stir_since = -10.0    # a clap while asleep
+        self.wants = None          # the newest thing Mote wants to say (a trigger)
+        self.wants_t = 0.0         # when it wanted it
+        self.startle = None        # (time, trust, memories) before the last fright
+        self.awake_since = 0.0
 
     def mood(self):
         for top, name in MOODS:
             if self.trust <= top:
                 return name
 
-    def change_trust(self, d, why):
+    def change_trust(self, d, why, say=True):
+        # say=False when another line covers it (the peek-out, the door)
         old, old_mood = self.trust, self.mood()
         self.trust = max(0, min(10, self.trust + d))
         msg = 'trust %d -> %d (%s)' % (old, self.trust, why)
         if self.mood() != old_mood:
             msg += ', mood %s -> %s' % (old_mood, self.mood())
+            if say:
+                self.want('mood-' + self.mood())
         log(msg)
         note('trust %d' % self.trust)
+
+    def want(self, trigger):
+        # the mind sends only the newest, so this replaces any older wish
+        if self.wants and self.wants != trigger:
+            log('wants %s (replaces %s)' % (trigger, self.wants))
+        self.wants = trigger
+        self.wants_t = now()
+
+    def memory_text(self):
+        # "what,seconds ago|..." for mote-mind
+        t = now()
+        return '|'.join(['%s,%d' % (m, t - s) for s, m in self.memories])
 
     def set_expr(self, expr, secs=0):
         if expr != self.expr:
@@ -515,10 +783,19 @@ class Mote:
     def set_state(self, state, lux):
         log('lux=%-3s %s -> %s' % (lux, self.state, state))
         note(state)
+        if state == 'drowsy' and self.state == 'awake' \
+                and now() - self.awake_since >= AWAKE_FOR_GOODNIGHT:
+            self.want('goodnight')
+        elif state == 'awake' and self.wants == 'goodnight':
+            self.wants = None                            # uncovered again in time
         self.state = state
         self.since = now()
+        if state == 'awake':
+            self.awake_since = self.since
         if state == 'waking':
             chirp('wake')
+            self.remember('woke up')
+            self.want('wake')
         if state != 'awake':
             self.finger = None
             self.set_expr(None)
@@ -543,6 +820,16 @@ class Mote:
             return
         self.door_t = t
         self.light_quiet_until = t + LIGHT_IGNORE
+        if MIC:
+            MIC.mute_until = max(MIC.mute_until, t + SNAP_MUTE)
+        if self.startle and t - self.startle[0] < SNAP_UNDO and self.expr == 'hide':
+            # the keyboard snaps as it slides, just before the switch: not a clap
+            st, self.trust, self.memories = self.startle
+            self.startle = None
+            self.set_expr(None)
+            log('the "clap" %.1f s ago was the keyboard: fright undone, trust %d' % (
+                t - st, self.trust))
+            note('fright undone (keyboard)')
         log('keyboard %s (light ignored for %.1f s)' % (state, LIGHT_IGNORE))
         note('door ' + state)
         if self.door and self.state == 'asleep':
@@ -551,7 +838,7 @@ class Mote:
             self.set_expr('peek', PEEK_TIME)
             chirp('wow')
             self.felt = 'saw outside'
-            self.change_trust(DOOR_TRUST, 'door opened')
+            self.change_trust(DOOR_TRUST, 'door opened', False)
             self.outside_pending = True
         else:
             if self.outside_pending:
@@ -597,6 +884,7 @@ class Mote:
             kind = lux >= OUTSIDE_BRIGHT and 'bright' or 'dim'
             self.remember('saw outside (%s)' % kind)
             note('saw outside %s (lux %d)' % (kind, lux))
+            self.want('door-' + kind)
         dark, bright = self.light_limits()
         if lux > dark:
             # the room's level; while covered, the last one is kept
@@ -642,11 +930,15 @@ class Mote:
             self.set_state('awake', '')
         secs = self.mood() == 'fond' and HIDE_FOND or HIDE_TIME
         self.finger = None
+        if self.wants:
+            log('fright: %s not said' % self.wants)
+            self.wants = None
+        self.startle = (t, self.trust, list(self.memories))
         self.set_expr('hide', secs)
         chirp('yelp')
         self.felt = 'startled'
         note('startle')
-        self.change_trust(CLAP_TRUST, 'loud sound')
+        self.change_trust(CLAP_TRUST, 'loud sound', False)
         self.remember('startled by a loud sound')
 
     def feel_touch(self, name, pos):
@@ -682,9 +974,11 @@ class Mote:
                 self.felt = 'poked a lot'
                 note('touch annoyed')
                 self.change_trust(-1, 'poked a lot')
+                self.remember('poked a lot')
                 chirp('grr')
             elif self.expr != 'annoyed':
                 self.set_expr('flinch', 0.4)
+                self.remember('poked')
                 chirp('eep')
         elif name == 'pet':
             if self.expr != 'happy':
@@ -693,6 +987,7 @@ class Mote:
         elif name == 'hold':
             self.set_expr('calm')
             chirp('purr')
+            self.remember('held')
             self.change_trust(1, 'held')
         elif name == 'up':
             self.finger = None
@@ -716,6 +1011,7 @@ class Mote:
             chirp('peek')
             log('peeks out')
             note('peek out')
+            self.want('peekout')
         if self.expr_until and t >= self.expr_until:
             self.set_expr(None)
         period = 2.2                                     # s per breath
@@ -732,6 +1028,8 @@ class Mote:
             if self.pet_px >= PET_PX and self.pet_gain < PET_MAX:
                 self.pet_px -= PET_PX
                 self.pet_gain += 1
+                if self.pet_gain == 1:
+                    self.remember('petted')      # once per petting session
                 self.change_trust(1, 'petted')
         # size and place follow the mood; fond Mote follows your finger
         target = MOOD_SCALE[self.mood()]
@@ -1029,6 +1327,26 @@ def show_schedule():
     return steps
 
 
+def mind_schedule():
+    # the demo script, minus voice
+    steps = [(0, 'Get ready: first you will COVER the light sensor', None),
+             (6, 'COVER the light sensor now, keep it covered', None)]
+    t = 6
+    steps.append((t + 8, 'UNCOVER now', 'try wake (expect: wake line)'))
+    steps.append((t + 15, 'Next: PET Mote, in 3...', None))
+    steps.append((t + 18, 'PET Mote now: stroke it side to side',
+                  'try pet (expect: mood line, timid -> curious)'))
+    steps.append((t + 28, 'Next: CLAP once, in 3...', None))
+    steps.append((t + 31, 'CLAP once now', 'try clap (expect: hide, then a peek-out line)'))
+    steps.append((t + 42, 'Next: SLIDE the keyboard OUT, in 3...', None))
+    steps.append((t + 45, 'SLIDE the keyboard OUT now', 'try door (expect: door line)'))
+    steps.append((t + 56, 'Next: slide it IN, then COVER the sensor, in 3...', None))
+    steps.append((t + 59, 'Slide the keyboard IN, then COVER the sensor',
+                  'try goodnight (expect: goodnight line, sleeps)'))
+    steps.append((t + 75, 'Done', 'done'))
+    return steps
+
+
 def tries_summary(mote, what):
     log('--- %s summary (seconds after each prompt) ---' % what)
     marks = [i for i in range(len(EVENTS))
@@ -1089,20 +1407,24 @@ def fmt(x):
 
 
 def main():
-    global FONT, MIC
+    global FONT, MIC, MIND, SAY_FONT
     args = sys.argv[1:]
     mode = None
     limit = None
     for a in args:
         if a.isdigit():
             limit = int(a)
-        elif a in ('test', 'touch', 'annoy', 'hold', 'door', 'clap', 'hide', 'show'):
+        elif a in ('test', 'touch', 'annoy', 'hold', 'door', 'clap', 'hide', 'show', 'mind'):
             mode = a
     raw = 'raw' in args            # log every touch event pygame delivers
 
     # the mic takes about half a second to start, so it starts first
     MIC = Mic(mode in ('clap', 'hide'))
     MIC.start()
+    # so does the mind's SSH connection (about 3 s)
+    MIND = Mind('nomind' not in args)
+    if MIND.enabled:
+        MIND.connect()
     pygame.mixer.pre_init(SOUND_RATE, -16, 1, 512)
     pygame.init()
     screen = pygame.display.set_mode((W, H), FULLSCREEN)
@@ -1110,9 +1432,10 @@ def main():
     try:
         FONT = pygame.font.Font(None, 48)
         SMALL = pygame.font.Font(None, 28)
+        SAY_FONT = pygame.font.Font(None, 36)
     except Exception, e:
         log('no font: %s' % e)
-        FONT = SMALL = None
+        FONT = SMALL = SAY_FONT = None
     clock = pygame.time.Clock()
     load_chirps()
     # the outside room is drawn once per darkness level, then only copied
@@ -1143,11 +1466,14 @@ def main():
         steps = hide_schedule()
     elif mode == 'show':
         steps = show_schedule()
+    elif mode == 'mind':
+        steps = mind_schedule()
     if steps and limit is None:
         limit = steps[-1][0] + 1
     prompt = ''
     next_lux = next_slide = 0
     last_lux = last_scene = last_prompt = last_debug = last_area = None
+    bubble = where = bubble_shown = None   # (rect, image), where it sits, its key
     frames, fps_t0, cpu0 = 0, now(), time.clock()
     running = True
     while running:
@@ -1202,11 +1528,13 @@ def main():
         for name, level, base in MIC.take():
             mote.feel_sound(name, level, base)
         mote.update(touch.take_stroked())
+        MIND.tick(mote)
 
         # redraw only what changed: Mote's old and new area, the prompt and
         # the debug corner. The whole screen while the background fades or
         # the door slides; the outside room changes in 4 steps as it dims.
         bg = mote.background()
+        key = SAY_FONT and bubble_key(MIND)
         k = mote.door_k()
         level = int(round(mote.darkness() * (ROOM_LEVELS - 1)))
         if k >= 1:
@@ -1229,6 +1557,7 @@ def main():
             debug += '   door open'
         if MIC.started is not None:
             debug += '   mic %s' % (MIC.baseline() or '-')
+        debug += '   mind %s' % MIND.status()
         if scene != last_scene:
             if k >= 1:
                 screen.blit(room, (0, 0))
@@ -1243,9 +1572,31 @@ def main():
             area = mote.draw(screen)
             dirty = None
         else:
+            if key != bubble_shown and bubble:           # the old bubble goes
+                paint(bubble[0])
             paint(last_area)
             area = mote.draw(screen)
             dirty = [area.union(last_area)]
+            if key != bubble_shown and bubble:
+                dirty.append(bubble[0])
+        # the bubble is drawn once, then again only where Mote overlaps it
+        if key != bubble_shown:
+            if key is None:
+                bubble, where = None, None
+            else:
+                if where is None or key[0] != bubble_shown[0]:
+                    where = (int(mote.x), mote.body.top)
+                bubble = make_bubble(key, mote, where)
+            bubble_shown = key
+            if bubble:
+                screen.blit(bubble[1], bubble[0])
+                if dirty is not None:
+                    dirty.append(bubble[0])
+        elif bubble and (dirty is None or area.colliderect(bubble[0])
+                         or last_area.colliderect(bubble[0])):
+            screen.blit(bubble[1], bubble[0])
+            if dirty is not None:
+                dirty.append(bubble[0])
         if dirty is None or prompt != last_prompt:
             if dirty is not None:
                 paint(PROMPT_AREA)
@@ -1281,9 +1632,10 @@ def main():
         touch_summary(touch, mote)
     elif mode == 'door':
         tries_summary(mote, 'door')
-    elif mode in ('clap', 'hide'):
+    elif mode in ('clap', 'hide', 'mind'):
         tries_summary(mote, mode)
     MIC.stop()
+    MIND.stop()
     pygame.quit()
     log('stopped')
 
@@ -1293,3 +1645,5 @@ if __name__ == '__main__':
     finally:
         if MIC:
             MIC.stop()             # never leave gst-launch holding the mic
+        if MIND:
+            MIND.stop()

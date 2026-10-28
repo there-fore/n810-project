@@ -101,6 +101,7 @@ Package catalog: `http://maemo.viniciuspaes.com/extras/`, distribution `diablo`,
 | `ollama-warmup.service` | systemd | Reloads `gemma4:e4b` whenever Ollama starts |
 | OpenCode 1.19.3 | `/usr/local/bin/opencode` | Agent behind `agent` |
 | `n810-ask`, `n810-agent` | `/usr/local/bin` | Node side of `ask` and `agent` |
+| `mote-mind` | `/usr/local/bin` (copy in `mote/mote-mind`) | Mote's mind: one short line per request, from Gemma E2B (port 8092); needs llamatalk running |
 | `ssh-legacy.service` | systemd | SSH for the N810 only (port 2222, user `n810`) |
 | llamatalk | `~/llamatalk` (ubuntu user), started by hand | Speech recognition, Gemma E2B, speech |
 
