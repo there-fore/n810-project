@@ -115,10 +115,10 @@ Starting numbers come from [probes/SENSORS.md](probes/SENSORS.md). Mic and light
 | **Mood looks** | — | Timid: smaller (85%), eyes a third closed. Curious: normal size, eyes follow your finger. Fond: bigger (110%), hops, follows your finger across the screen | — |
 | **Keyboard opens** | Poll `slide/state` 10 times a second | `closed` → `open` | Door scene (outside room); door line 1 s later, using the light level after it settles |
 | **Keyboard closes** | Same | `open` → `closed` | Back inside |
-| **Clap** | Mic loudness every 100 ms; baseline = median of the last 5 s of quiet slices (at least 2) | One slice above 20 × baseline and above 600, back below 5 × baseline within 300 ms | Startle and hide for 3 s (1.5 s if fond), trust −2. While asleep: it stirs and rolls over but stays asleep |
+| **Clap** | Mic loudness every 100 ms; baseline = median of the last 5 s of quiet slices (at least 2) | One slice above 20 × baseline and above 600, back below 5 × baseline **or below an eighth of its peak** within 300 ms (added in step 4: in a classroom a clap rings on, 1428 → 369 → 140). Louder for longer is logged as *loud*, not a clap | Startle and hide for 3 s (1.5 s if fond), trust −2: shrinks, sinks, shuts its eyes and trembles, then peeks out with quick glances for 1 s. A hold ends the hide early; pokes and pets are ignored while hiding. While asleep (or drowsy): it stirs and rolls over but stays asleep |
 | **Voice** | Same | Above 8 × baseline and above 40 for at least 0.8 s of the last 1 s (short dips allowed) | Starts listening (ripples). Keeps 0.5 s of audio from before, so the first word isn't cut |
 | **Voice ends** | Same | Below 4 × baseline for 0.7 s, or 6 s in total | Sends the recording to the mind; thought bubble |
-| **Mic, ignored** | — | While asleep (except a clap), while thinking, for 300 ms after each chirp (the speaker is close to the mic), and the first 100 ms after the mic starts (a click) | — |
+| **Mic, ignored** | — | While asleep (except a clap), while thinking, for 300 ms after each chirp ends (the speaker is close to the mic; its echo reaches the mic 0.2–0.3 s after the chirp starts, at about 170), and the first 100 ms after the mic starts (a click) | — |
 
 The mic runs from start to end (it takes about 1 s to start).
 
@@ -145,7 +145,7 @@ The mic runs from start to end (it takes about 1 s to start).
 
 ### How it fits together
 
-- **On the N810: `mote.py`** (Python 2.5 + pygame), one loop at about 25 frames a second that draws Mote and polls light and the slide. A thread reads the mic (`gst-launch-0.10 dsppcmsrc` writing raw audio to the program; to check: `fdsink` or `filesink location=/dev/stdout`) and works out the loudness. Another thread holds **one** open `ssh onode2` connection to the mind.
+- **On the N810: `mote.py`** (Python 2.5 + pygame), one loop at about 25 frames a second that draws Mote and polls light and the slide. A thread reads the mic (`gst-launch-0.10 dsppcmsrc ! … ! fdsink fd=3`, with fd 3 sent to the program, because gst-launch prints status lines on stdout; a named pipe with `filesink` delivered nothing) and works out the loudness. Another thread holds **one** open `ssh onode2` connection to the mind.
 - **On onode: `mote-mind`**, a small helper (in the `n810` user's home) started by that SSH connection. It reads one request at a time: a text request, or a recording (8 kHz). For a recording it resamples to 16 kHz, normalizes the volume, sends it to speech recognition (port 8091), strips the `language English<asr_text>` prefix, then asks Gemma E2B (port 8092) and returns one line.
 - **Python 2.5 has no `json` module**, so the two sides talk in simple `key=value` lines plus a byte count for audio.
 - **Expected waits:** text line about 2 s; speech reply about 1.3 s + 2 s + sending the audio.
@@ -161,6 +161,7 @@ Each step ends with a test Rose can do on the device in a visible terminal, with
 3. **Keyboard door:** the outside room, plus the 1.5 s light-ignore window.
    **Done 2026-10-28**: see [Step 3 results](#step-3-results-2026-10-28) below.
 4. **Mic:** baseline, clap startle and hide, chirps, and the 300 ms mute after each chirp.
+   **Done 2026-10-28**: see [Step 4 results](#step-4-results-2026-10-28) below.
 5. **Mind, text only:** write `mote-mind` on onode (with Rose's OK), the open SSH connection, the wake and mood lines, the thought bubble, the 4 s timeout and fallback lines.
 6. **Voice:** listening detection, sending the recording, the reply.
 7. **Rehearse:** run the script 3 times end to end, measure memory and CPU, log the mic and light levels, and retune the thresholds in the demo room.
@@ -218,3 +219,25 @@ It prompts on the N810's screen: slide the keyboard out and in 3 times, then out
 - **Speed:** 20 frames per second, about 20% of the processor, the same as step 2.
 - **Not yet:** the door line from the mind (step 5). How the room and the peek look on screen hasn't been reviewed by Rose yet; the runs only checked the log.
 - **The N810's clock** read 1970 again after a reboot. Mote doesn't need it.
+
+## Step 4 results (2026-10-28)
+
+[mote/mote.py](mote/mote.py) now hears claps and chirps. Tests, run from the laptop after copying the files over as in step 1:
+
+```
+ssh -t n810 sh /tmp/run-mote.sh clap    # clap 3 times, talk, clap + hold, poke, clap while asleep
+ssh -t n810 sh /tmp/run-mote.sh hide    # clap, then hold Mote while it hides (twice)
+ssh -t n810 sh /tmp/run-mote.sh show    # no clapping: Mote is startled on cue 3 times, to watch the look
+```
+
+`clap` and `hide` log every slice that isn't quiet (`mic 1428 (baseline 8)`). The bottom-left corner shows the mic's baseline.
+
+- **Mic into the program:** checked first with [probes/mic_stream_probe.py](probes/mic_stream_probe.py). A named pipe with `filesink` delivered nothing; `fdsink fd=3` works, and audio arrives 0.5–0.9 s after launch. pygame can play sound while the mic records.
+- **Chirps:** wake, poke (*eep*), annoyed (*grr*), pet and hold (*purr*), startle (*yelp*), peek-out and door-open (*wow*), made as short sine sweeps. Making them takes 14 s, so they are saved in `/tmp` (`/tmp/mote-*-1.wav`) and only made again after a reboot. Rose heard them clearly in the classroom.
+- **Room level at school:** quiet slices 8–13 (home was 1–2), the reason the clap rule compares with the baseline.
+- **1st clap test:** only 2 of 5 claps counted. The others rang on above 5 × baseline for more than 300 ms and were taken as *loud*. The fall rule now also accepts an eighth of the peak.
+- **2nd clap test** (seconds after each prompt, including Rose's reaction): claps 1–3 startled at +1.4 to +1.6 s and peeked out 3 s later. Talking: no startle (loudest slice 505). Two pokes (one read as a pet): their chirps set nothing off, and 61 slices were ignored after chirps. A table slap while asleep (one hand covered the sensor, so no clap was possible): *stirs*, stays asleep, wakes on uncover. In "clap, then hold" there was no touch at all and the clap came 4 s late, so that step moved to its own test.
+- **`hide` test:** 2 of 2 claps startled (676 and 1883 against baselines of 10 and 8), and 2 of 2 holds ended the hide: one 2.6 s into the 3 s hide, one right at 3 s.
+- **`show` mode:** Rose watched the hide and peek-out (timid 3 s twice, fond 1.5 s once): "looks good". The startle itself costs 2 trust, so a fond Mote at 8 drops to curious while it hides.
+- **Speed:** 20 frames per second, but the processor went from about 20% to 37% with the mic running, nearly all of it the loudness maths (every other sample is measured). Measuring every 4th sample is the next step if step 5 needs room.
+- **Not yet:** the talk test was quiet speech (Rose was in a classroom), so loud talking against the clap rule is untested. A clap during the 0.3 s after a chirp is ignored.

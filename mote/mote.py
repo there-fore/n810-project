@@ -1,18 +1,22 @@
 # Mote, the October creature demo (Python 2.5 + pygame 1.7.1 on the N810).
-# Build steps 1-3: a blob that breathes and blinks, sleeps when the light
-# sensor is covered, feels touch (poke, pet, hold) with trust and moods, and
-# peeks into the outside room when the keyboard (the door) slides out.
+# Build steps 1-4: a blob that breathes and blinks, sleeps when the light
+# sensor is covered, feels touch (poke, pet, hold) with trust and moods,
+# peeks into the outside room when the keyboard (the door) slides out, and
+# hears claps (startles and hides) and chirps.
 # Thresholds are from CREATURE.md ("Affordance -> behaviour").
-# Usage (on the N810, as user):  DISPLAY=:0 python2.5 mote.py [test|touch|door] [raw] [secs]
+# Usage (on the N810, as user):  DISPLAY=:0 python2.5 mote.py [test|touch|door|clap] [raw] [secs]
 #   test  = timed COVER / UNCOVER prompts, then a summary of reaction times
 #   touch = timed POKE / PET / HOLD prompts, then a summary of what Mote felt
 #   annoy = timed prompts to poke Mote fast, twice (checks the annoyed look)
 #   hold  = timed prompts to hold Mote, then pet and hold (checks the held look)
 #   door  = timed prompts to slide the keyboard out and in, then a summary
+#   clap  = timed prompts to clap, talk, hold and sleep, then a summary
+#   hide  = timed prompts to clap, then hold Mote while it hides (twice)
+#   show  = Mote is startled on cue 3 times (no clapping), to watch the look
 #   raw   = log every touch event pygame delivers
 #   secs  = quit after this many seconds (default: run until the top-right
 #           corner is tapped, or Esc / q is pressed)
-import sys, time, math, random
+import os, sys, time, math, random, array, wave, signal, threading, subprocess
 import pygame
 from pygame.locals import *
 
@@ -36,6 +40,42 @@ DOOR_TRUST = 2             # seeing outside is what Mote wants most
 DOOR_WIPE = 0.6            # s: the door slides open / shut on screen
 PEEK_TIME = 3.0            # s: Mote looks around the outside room
 MEMORIES = 8               # remember the last this many events
+
+# The mic: gst-launch streams 8 kHz mono 16-bit audio out of fdsink (a named
+# pipe with filesink delivered nothing) to a thread that measures each slice.
+MIC_CMD = ('exec gst-launch-0.10 dsppcmsrc ! audio/x-raw-int,rate=8000,channels=1 ! '
+           'fdsink fd=3 3>&1 >/dev/null 2>&1')   # gst prints status on stdout
+MIC_BLOCK = 640            # bytes per DSP buffer (40 ms)
+MIC_SLICE = 1600           # bytes per loudness slice (100 ms)
+MIC_SKIP = 1               # slices to skip at switch-on (a click)
+BASE_WINDOW = 5.0          # s: baseline = median of the quiet slices this recent...
+BASE_MIN = 2               # ...once there are at least this many
+QUIET_TIMES = 4            # a slice below this x baseline is quiet
+CLAP_TIMES = 20            # clap: one slice above this x baseline...
+CLAP_FLOOR = 600           # ...and above this (claps measured 946-1350)...
+CLAP_FALL = 5              # ...back below this x baseline, or below...
+CLAP_DROP = 8              # ...the peak / this (a clap rings on in a big room:
+                           # 1428 -> 369 -> 140 -> 68 at school, baseline 8)...
+CLAP_SLICES = 3            # ...within this many slices (300 ms); else just loud
+CLAP_TRUST = -2
+HIDE_TIME = 3.0            # s: hides after a clap
+HIDE_FOND = 1.5            # s: a fond Mote recovers faster
+PEEK_OUT = 1.0             # s: peeks out after hiding
+STIR_TIME = 1.0            # s: a clap while asleep makes it stir
+
+SOUND_RATE = 22050
+CHIRP_MUTE = 0.3           # s: ignore the mic this long after a chirp ends
+                           # (the speaker's echo arrives 0.2-0.3 s after it starts)
+# chirps: (seconds, start Hz, end Hz, volume, wobble Hz); 0 Hz = a gap
+CHIRPS = {
+    'wake': [(0.18, 900, 1600, 0.6, 0)],
+    'eep':  [(0.08, 1900, 2500, 0.7, 0)],
+    'grr':  [(0.3, 220, 180, 0.7, 30)],
+    'purr': [(0.35, 420, 480, 0.6, 22)],
+    'yelp': [(0.2, 2600, 900, 0.8, 0)],
+    'peek': [(0.07, 1300, 1500, 0.5, 0), (0.06, 0, 0, 0, 0), (0.08, 1500, 1900, 0.5, 0)],
+    'wow':  [(0.3, 700, 1900, 0.6, 0)],
+}
 
 POKE_TIME = 0.6            # down and up within this, and still -> poke (taps: 0.05-0.55 s)
 STILL = 20                 # px: moved less than this from where it went down
@@ -63,7 +103,7 @@ FPS_AWAKE = 20
 FPS_ASLEEP = 10
 QUIT_BOX = Rect(W - 80, 0, 80, 80)
 PROMPT_AREA = Rect(0, 0, W, 60)
-DEBUG_AREA = Rect(0, H - 40, 680, 40)
+DEBUG_AREA = Rect(0, H - 40, W - 90, 40)
 
 BG_AWAKE = (40, 52, 78)
 BG_ASLEEP = (14, 16, 30)
@@ -78,6 +118,8 @@ DIM_TEXT = (150, 160, 190)
 
 T0 = time.time()
 EVENTS = []                # (time, name) for the test summaries
+MIC = None                 # the Mic, once started
+SOUNDS = {}                # chirp name -> (pygame Sound, seconds)
 
 def now():
     return time.time() - T0
@@ -264,6 +306,159 @@ class Touch:
         return px
 
 
+def rms(chunk):
+    # loudness of a slice; Maemo's Python has no audioop, and every other
+    # sample is plenty (the whole slice took a third of the processor)
+    s = array.array('h', chunk).tolist()[::2]
+    return int((sum([v * v for v in s]) / float(len(s))) ** 0.5)
+
+
+class Mic:
+    # reads the mic in a thread; take() turns the slices into 'clap' / 'loud'
+    def __init__(self, verbose):
+        self.verbose = verbose     # log every slice that isn't quiet
+        self.proc = None
+        self.lock = threading.Lock()
+        self.slices = []           # (arrival time, level) not yet handled
+        self.count = 0
+        self.mute_until = 0
+        self.muted = 0             # slices ignored after a chirp
+        self.quiet = []            # (time, level) of recent quiet slices
+        self.spike = None          # level of a possible clap
+        self.spike_base = 0
+        self.after = 0             # slices since the spike
+        self.started = None
+
+    def start(self):
+        try:
+            self.proc = subprocess.Popen(MIC_CMD, shell=True, stdout=subprocess.PIPE)
+        except OSError, e:
+            log('mic not started: %s' % e)
+            return
+        self.thread = threading.Thread(target=self.read)
+        self.thread.setDaemon(True)
+        self.thread.start()
+
+    def read(self):
+        buf = ''
+        f = self.proc.stdout
+        while True:
+            d = f.read(MIC_BLOCK)
+            if not d:
+                break
+            if self.started is None:
+                self.started = now()
+                log('mic streaming')
+            buf += d
+            while len(buf) >= MIC_SLICE:
+                level = rms(buf[:MIC_SLICE])
+                buf = buf[MIC_SLICE:]
+                self.lock.acquire()
+                try:
+                    self.slices.append((now(), level))
+                finally:
+                    self.lock.release()
+        log('mic stopped')
+
+    def stop(self):
+        if self.proc:
+            try:
+                os.kill(self.proc.pid, signal.SIGTERM)
+            except OSError:
+                pass
+            self.proc = None
+            self.thread.join(1.0)  # let it finish before Python shuts down
+
+    def baseline(self):
+        if len(self.quiet) < BASE_MIN:
+            return None
+        s = sorted([l for _, l in self.quiet])
+        return max(1, s[len(s) / 2])
+
+    def take(self):
+        # returns [(name, level, baseline)] for the slices that arrived
+        self.lock.acquire()
+        try:
+            got, self.slices = self.slices, []
+        finally:
+            self.lock.release()
+        heard = []
+        for t, level in got:
+            self.count += 1
+            if self.count <= MIC_SKIP:
+                continue
+            if t < self.mute_until:
+                self.muted += 1
+                continue
+            self.quiet = [(s, l) for s, l in self.quiet if t - s < BASE_WINDOW]
+            base = self.baseline()
+            if self.verbose and base and level >= QUIET_TIMES * base:
+                log('mic %d (baseline %d)' % (level, base))
+            if self.spike is not None:
+                # a clap is one spike, gone again within 300 ms
+                self.after += 1
+                if level < max(CLAP_FALL * self.spike_base, self.spike / CLAP_DROP):
+                    heard.append(('clap', self.spike, self.spike_base))
+                    self.spike = None
+                elif self.after >= CLAP_SLICES:
+                    heard.append(('loud', self.spike, self.spike_base))
+                    self.spike = None
+                continue
+            if base and level > CLAP_TIMES * base and level > CLAP_FLOOR:
+                self.spike, self.spike_base, self.after = level, base, 0
+                continue
+            if base is None or level < QUIET_TIMES * base:
+                self.quiet.append((t, level))
+        return heard
+
+
+def make_chirp(path, parts):
+    # writes a short whistle: each part sweeps from one pitch to another
+    out = array.array('h')
+    ph = 0.0
+    for secs, f0, f1, vol, wobble in parts:
+        n = int(SOUND_RATE * secs)
+        for i in range(n):
+            k = i / float(n)
+            if not f0:
+                out.append(0)
+                continue
+            ph += 2 * math.pi * (f0 + (f1 - f0) * k) / SOUND_RATE
+            amp = 14000 * vol * math.sin(math.pi * k)    # soft in, soft out
+            if wobble:
+                amp *= 0.6 + 0.4 * math.sin(2 * math.pi * wobble * i / SOUND_RATE)
+            out.append(int(amp * math.sin(ph)))
+    w = wave.open(path, 'wb')
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate(SOUND_RATE)
+    w.writeframes(out.tostring())
+    w.close()
+
+
+def load_chirps():
+    # made once and kept in /tmp (they take a few seconds to compute)
+    if not pygame.mixer.get_init():
+        log('no sound: the mixer did not start')
+        return
+    t = now()
+    for name, parts in CHIRPS.items():
+        path = '/tmp/mote-%s-1.wav' % name
+        if not os.path.exists(path):
+            make_chirp(path, parts)
+        SOUNDS[name] = (pygame.mixer.Sound(path), sum([p[0] for p in parts]))
+    log('chirps ready in %.1f s' % (now() - t))
+
+
+def chirp(name):
+    if name not in SOUNDS:
+        return
+    sound, secs = SOUNDS[name]
+    sound.play()
+    if MIC:
+        MIC.mute_until = max(MIC.mute_until, now() + secs + CHIRP_MUTE)
+
+
 class Mote:
     def __init__(self):
         self.state = 'awake'       # awake, drowsy, asleep, waking
@@ -295,6 +490,7 @@ class Mote:
         self.ignored = []          # lux readings ignored since the slide moved
         self.outside_pending = False   # note what it saw once the light settles
         self.memories = []         # (time, text), the last MEMORIES events
+        self.stir_since = -10.0    # a clap while asleep
 
     def mood(self):
         for top, name in MOODS:
@@ -321,6 +517,8 @@ class Mote:
         note(state)
         self.state = state
         self.since = now()
+        if state == 'waking':
+            chirp('wake')
         if state != 'awake':
             self.finger = None
             self.set_expr(None)
@@ -351,6 +549,7 @@ class Mote:
             log('door opened while asleep: Mote does not see it')
         elif self.door:
             self.set_expr('peek', PEEK_TIME)
+            chirp('wow')
             self.felt = 'saw outside'
             self.change_trust(DOOR_TRUST, 'door opened')
             self.outside_pending = True
@@ -426,12 +625,46 @@ class Mote:
             # dark again before the eyes are fully open: back to sleep
             self.set_state('asleep', lux)
 
+    def feel_sound(self, name, level, base):
+        t = now()
+        if name == 'loud':
+            log('loud sound %d (baseline %d), not a clap' % (level, base))
+            note('loud, not a clap')
+            return
+        log('clap %d (baseline %d)' % (level, base))
+        if self.state not in ('awake', 'waking'):
+            # asleep (or dozing off): it stirs and rolls over, stays asleep
+            self.stir_since = t
+            log('clap while %s: stirs' % self.state)
+            note('stir (%s)' % self.state)
+            return
+        if self.state == 'waking':
+            self.set_state('awake', '')
+        secs = self.mood() == 'fond' and HIDE_FOND or HIDE_TIME
+        self.finger = None
+        self.set_expr('hide', secs)
+        chirp('yelp')
+        self.felt = 'startled'
+        note('startle')
+        self.change_trust(CLAP_TRUST, 'loud sound')
+        self.remember('startled by a loud sound')
+
     def feel_touch(self, name, pos):
         if name in ('poke', 'pet', 'hold') and self.state != 'awake':
             log('touch %s ignored (%s)' % (name, self.state))
             note('touch %s (ignored, %s)' % (name, self.state))
         if self.state != 'awake':
             return
+        if self.expr == 'hide':
+            # hiding: only a still, comforting hold reaches it
+            if name == 'hold':
+                log('held while hiding: comes out early')
+                note('hide ended by hold')
+            else:
+                if name in ('poke', 'pet'):
+                    log('touch %s ignored (hiding)' % name)
+                    note('touch %s (ignored, hiding)' % name)
+                return
         t = now()
         if name in ('poke', 'pet', 'hold'):
             log('touch %s at %s' % (name, pos))
@@ -449,12 +682,17 @@ class Mote:
                 self.felt = 'poked a lot'
                 note('touch annoyed')
                 self.change_trust(-1, 'poked a lot')
+                chirp('grr')
             elif self.expr != 'annoyed':
                 self.set_expr('flinch', 0.4)
+                chirp('eep')
         elif name == 'pet':
+            if self.expr != 'happy':
+                chirp('purr')
             self.set_expr('happy')
         elif name == 'hold':
             self.set_expr('calm')
+            chirp('purr')
             self.change_trust(1, 'held')
         elif name == 'up':
             self.finger = None
@@ -473,6 +711,11 @@ class Mote:
         if self.state == 'awake' and t >= self.next_blink:
             self.blink_until = t + 0.15
             self.next_blink = t + random.uniform(2.5, 6.0)
+        if self.expr == 'hide' and t >= self.expr_until:
+            self.set_expr('peekout', PEEK_OUT)           # the coast is clear?
+            chirp('peek')
+            log('peeks out')
+            note('peek out')
         if self.expr_until and t >= self.expr_until:
             self.set_expr(None)
         period = 2.2                                     # s per breath
@@ -513,7 +756,9 @@ class Mote:
             return 1.0
         if self.expr == 'annoyed':
             return 0.45
-        if self.expr in ('notice', 'peek'):
+        if self.expr == 'hide':
+            return 1.0
+        if self.expr in ('notice', 'peek', 'peekout'):
             return 0.0
         if self.mood() == 'timid':
             return 0.35
@@ -558,9 +803,16 @@ class Mote:
             squash = 25 * max(0.0, self.expr_until - t) / 0.4
         if self.expr == 'peek':                          # rises, tall and alert
             stretch = 18 * min(1.0, (t - self.expr_since) / 0.4)
-        bw = int((bw * (1 + depth * breath) - stretch * 0.5 + squash) * self.scale)
-        bh = int((bh * (1 - depth * breath) + stretch - squash) * self.scale)
-        if self.mood() == 'fond' and self.state == 'awake' and not calm:
+        # hiding (after a clap): small, low, trembling; peeking out undoes it
+        hide = 0.0
+        if self.expr == 'hide':
+            hide = min(1.0, (t - self.expr_since) / 0.15)
+        elif self.expr == 'peekout':
+            hide = max(0.0, 1.0 - (t - self.expr_since) / 0.6)
+        scale = self.scale * (1 - 0.4 * hide)
+        bw = int((bw * (1 + depth * breath) - stretch * 0.5 + squash) * scale)
+        bh = int((bh * (1 - depth * breath) + stretch - squash) * scale)
+        if self.mood() == 'fond' and self.state == 'awake' and not calm and not hide:
             hop = int(abs(math.sin(t * math.pi / 0.6)) * 10)
         if self.finger and self.expr == 'happy':
             lean = max(-15, min(15, (self.finger[0] - self.x) / 4))
@@ -569,8 +821,14 @@ class Mote:
         if self.expr == 'annoyed':                       # shakes, goes red
             shake = int(math.sin(t * 2 * math.pi * 8) * 5)
             self.color = ANGRY
+        elif self.expr == 'hide':                        # trembles
+            shake = int(math.sin(t * 2 * math.pi * 12) * 3)
+        if asleep and t - self.stir_since < STIR_TIME:   # stirs: rolls a little
+            k = (t - self.stir_since) / STIR_TIME
+            shake = int(math.sin(k * math.pi * 2) * 14 * (1 - k))
+            bh += int(math.sin(k * math.pi) * 12)
         cx = int(self.x + lean + shake)
-        body = Rect(cx - bw / 2, 400 - hop - bh, bw, bh)
+        body = Rect(cx - bw / 2, 400 + int(50 * hide) - hop - bh, bw, bh)
         self.body = body
         pygame.draw.ellipse(screen, BODY_DARK, body.move(0, 6))
         pygame.draw.ellipse(screen, self.color, body)
@@ -617,6 +875,10 @@ class Mote:
             r = 17
             k = now() - self.expr_since
             look = (int(7 * math.sin(k * 2 * math.pi / 1.5)), -3)
+        elif self.expr == 'peekout':                     # wary: quick glances
+            r = 17
+            k = now() - self.expr_since
+            look = (int(7 * math.sin(k * 2 * math.pi / 0.5)), -2)
         for side, ex in ((-1, cx - bw / 5), (1, cx + bw / 5)):
             if self.expr == 'happy':                     # ^ ^
                 pygame.draw.lines(screen, EYE, 0,
@@ -709,8 +971,66 @@ def door_schedule():
     return steps
 
 
-def door_summary(mote):
-    log('--- door summary (seconds after each prompt) ---')
+def clap_schedule():
+    steps = [(0, 'Get ready: stay quiet, light sensor uncovered', None)]
+    t = 6
+    for i in range(1, 4):
+        steps.append((t, 'Round %d of 3: CLAP once, close to the N810, in 3...' % i, None))
+        steps.append((t + 3, 'CLAP once now, then watch Mote',
+                      'try clap %d (expect: startle, trust -2, peek out)' % i))
+        t += 11
+    steps.append((t, 'Next: TALK out loud for 3 s, in 3...', None))
+    steps.append((t + 3, 'TALK out loud now (Mote should NOT startle)',
+                  'try talk (expect: no startle)'))
+    t += 10
+    steps.append((t, 'Next: CLAP, then HOLD the middle of Mote still, in 3...', None))
+    steps.append((t + 3, 'CLAP now, then HOLD Mote still right away',
+                  'try clap and hold (expect: startle, hold ends the hide)'))
+    t += 10
+    steps.append((t, 'Lift your finger. Next: POKE Mote twice, slowly, in 3...', None))
+    steps.append((t + 3, 'POKE Mote twice, slowly (it chirps, no startle)',
+                  'try pokes (expect: 2 pokes, no startle)'))
+    t += 10
+    steps.append((t, 'Next: COVER the light sensor, in 3...', None))
+    steps.append((t + 3, 'COVER the light sensor now (keep it covered)',
+                  'try cover (expect: drowsy, asleep)'))
+    steps.append((t + 9, 'Keep it covered and SLAP the table once with your other hand',
+                  'try clap asleep (expect: stir, stays asleep)'))
+    steps.append((t + 14, 'UNCOVER now', 'try uncover (expect: waking)'))
+    steps.append((t + 19, 'Done', 'done'))
+    return steps
+
+
+def hide_schedule():
+    # a clap, then a hold while Mote hides, twice
+    steps = [(0, 'Get ready: stay quiet, light sensor uncovered', None)]
+    t = 6
+    for i in range(1, 3):
+        steps.append((t, 'Round %d of 2: CLAP once, in 3...' % i, None))
+        steps.append((t + 3, 'CLAP once now', 'try clap %d (expect: startle)' % i))
+        steps.append((t + 4.5, 'Now HOLD the middle of Mote, keep still',
+                      'try hold %d (expect: hold ends the hide, trust +1)' % i))
+        steps.append((t + 9, 'Lift your finger and wait', None))
+        t += 13
+    steps.append((t, 'Done', 'done'))
+    return steps
+
+
+def show_schedule():
+    # no clapping needed: Mote is startled on cue (event names start 'fake')
+    steps = [(0, 'Watch Mote: it gets a fright in 3 s (no need to clap)', None)]
+    t = 3
+    for i, mood in ((1, 'timid'), (2, 'timid'), (3, 'fond')):
+        steps.append((t, 'Startle %d of 3 (%s): hides for %s s, then peeks out' % (
+            i, mood, mood == 'fond' and HIDE_FOND or HIDE_TIME), 'fake clap ' + mood))
+        steps.append((t + 6, 'Next one in 2 s...', None))
+        t += 8
+    steps.append((t, 'Done', 'done'))
+    return steps
+
+
+def tries_summary(mote, what):
+    log('--- %s summary (seconds after each prompt) ---' % what)
     marks = [i for i in range(len(EVENTS))
              if EVENTS[i][1].startswith('try ') or EVENTS[i][1] == 'done']
     for a, b in zip(marks, marks[1:]):
@@ -719,6 +1039,9 @@ def door_summary(mote):
         log('%s\n         %s' % (EVENTS[a][1][4:], ', '.join(got) or 'nothing'))
     log('trust now %d (%s); memories: %s' % (mote.trust, mote.mood(),
         '; '.join([m for _, m in mote.memories]) or 'none'))
+    if MIC:
+        log('mic: %d slices, %d ignored after chirps, baseline now %s' % (
+            MIC.count, MIC.muted, MIC.baseline()))
 
 
 def light_summary():
@@ -766,17 +1089,21 @@ def fmt(x):
 
 
 def main():
-    global FONT
+    global FONT, MIC
     args = sys.argv[1:]
     mode = None
     limit = None
     for a in args:
         if a.isdigit():
             limit = int(a)
-        elif a in ('test', 'touch', 'annoy', 'hold', 'door'):
+        elif a in ('test', 'touch', 'annoy', 'hold', 'door', 'clap', 'hide', 'show'):
             mode = a
     raw = 'raw' in args            # log every touch event pygame delivers
 
+    # the mic takes about half a second to start, so it starts first
+    MIC = Mic(mode in ('clap', 'hide'))
+    MIC.start()
+    pygame.mixer.pre_init(SOUND_RATE, -16, 1, 512)
     pygame.init()
     screen = pygame.display.set_mode((W, H), FULLSCREEN)
     pygame.mouse.set_visible(0)
@@ -787,6 +1114,7 @@ def main():
         log('no font: %s' % e)
         FONT = SMALL = None
     clock = pygame.time.Clock()
+    load_chirps()
     # the outside room is drawn once per darkness level, then only copied
     rooms = []
     for i in range(ROOM_LEVELS):
@@ -809,6 +1137,12 @@ def main():
         steps = touch_schedule(ANNOY_TRIES)
     elif mode == 'door':
         steps = door_schedule()
+    elif mode == 'clap':
+        steps = clap_schedule()
+    elif mode == 'hide':
+        steps = hide_schedule()
+    elif mode == 'show':
+        steps = show_schedule()
     if steps and limit is None:
         limit = steps[-1][0] + 1
     prompt = ''
@@ -850,6 +1184,10 @@ def main():
             log('>>> ' + prompt)
             if name:
                 note(name)
+            if name and name.startswith('fake clap'):
+                if name.endswith('fond'):
+                    mote.trust = 8                       # fond hides for less
+                mote.feel_sound('clap', 0, 0)
 
         if t >= next_slide:
             next_slide = t + SLIDE_EVERY
@@ -861,6 +1199,8 @@ def main():
                 log('lux %s -> %s' % (last_lux, lux))
             last_lux = lux
             mote.feel_light(lux)
+        for name, level, base in MIC.take():
+            mote.feel_sound(name, level, base)
         mote.update(touch.take_stroked())
 
         # redraw only what changed: Mote's old and new area, the prompt and
@@ -887,6 +1227,8 @@ def main():
         debug = 'trust %d  %s   felt: %s' % (mote.trust, mote.mood(), mote.felt)
         if mote.door:
             debug += '   door open'
+        if MIC.started is not None:
+            debug += '   mic %s' % (MIC.baseline() or '-')
         if scene != last_scene:
             if k >= 1:
                 screen.blit(room, (0, 0))
@@ -938,9 +1280,16 @@ def main():
     elif mode in ('touch', 'annoy', 'hold'):
         touch_summary(touch, mote)
     elif mode == 'door':
-        door_summary(mote)
+        tries_summary(mote, 'door')
+    elif mode in ('clap', 'hide'):
+        tries_summary(mote, mode)
+    MIC.stop()
     pygame.quit()
     log('stopped')
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    finally:
+        if MIC:
+            MIC.stop()             # never leave gst-launch holding the mic
