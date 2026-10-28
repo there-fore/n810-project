@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+# Mote's mind, on onode (installed as /usr/local/bin/mote-mind). The N810
+# starts it once over `ssh onode2 mote-mind` and keeps the connection open.
+# It reads one request per line and answers each with one line:
+#   in:  trigger=wake<TAB>mood=timid<TAB>trust=3<TAB>memories=woke up,0|petted,12
+#   out: line=It's bright. Is someone there?      (or error=...)
+# Memories are "what,seconds ago" joined by "|". A request with trigger=hello
+# is answered with "ready" without asking the model.
+# Gemma 4 E2B (llamatalk, 127.0.0.1:8092) writes the lines. Mote knows no
+# facts, only its memories, so whatever it invents reads as a hatchling's guess.
+import json
+import re
+import sys
+import time
+import urllib.request
+
+URL = "http://127.0.0.1:8092/v1/chat/completions"
+TIMEOUT = 10          # s; the N810 gives up after 4 s anyway
+MAX_WORDS = 12
+
+SYSTEM = (
+    "You are Mote, a tiny shy creature that has just hatched inside an old tablet. "
+    "You know only what you have felt. You don't know the names of things, so you "
+    "describe them by how they feel. Talk like a wide-eyed small child: first person, "
+    "present tense, 12 words at most, plain ASCII, no emoji, no quotes. "
+    "Speak to the person holding you as 'you' when it fits. Never use the word 'now'."
+)
+
+# what just happened for each trigger, with example lines in the right voice
+TRIGGERS = {
+    "wake": ("you woke up. The dark went away and you can see again",
+             ["Oh! The dark is gone. Hello?", "I slept. Is someone still there?"]),
+    "mood-curious": ("you stopped being scared and now feel curious about the one who touches you",
+                     ["That felt nice. Can you do it again?", "You're not so scary after all."]),
+    "mood-fond": ("you feel safe now and fond of the one who touches you",
+                  ["I like you. Stay close, okay?", "When you hold me, I feel soft inside."]),
+    "mood-timid": ("you feel small and shy again and want to hide",
+                   ["That hurt a little. I'll be small now.", "I don't know you so well anymore."]),
+    "peekout": ("a sudden loud sound scared you, you hid, and now you peek out to see if it's gone",
+                ["That was so loud. Is it gone?", "My heart is still jumping. I'll stay small."]),
+    "door-bright": ("a door just slid open and for the first time you see the outside. It is bright",
+                    ["A door! So much bright out there!", "Outside is huge. Can I look longer?"]),
+    "door-dim": ("a door just slid open and for the first time you see the outside. It is dim",
+                 ["A door! It's dim out there. Is outside sleeping?", "So many shadows. I'll watch from here."]),
+    "goodnight": ("the light is going away and you are falling asleep. Say goodnight and remember one thing from today",
+                  ["You held me today. Goodnight.", "The loud thing scared me, but you stayed. Night."]),
+}
+
+ASCII = str.maketrans({
+    "‘": "'", "’": "'", "“": '"', "”": '"',
+    "–": "-", "—": "-", "…": "...", " ": " ",
+})
+
+
+def describe(mem):
+    # the 3 newest memories, newest first
+    out = []
+    for m in mem.split("|"):
+        if "," in m:
+            what, ago = m.rsplit(",", 1)
+            out.append("%s (%s s ago)" % (what.strip(), ago.strip()))
+    return "; ".join(list(reversed(out))[:3]) or "nothing yet"
+
+
+def tidy(text):
+    text = text.translate(ASCII).strip().strip('"').strip()
+    text = text.encode("ascii", "ignore").decode()
+    text = re.sub(r"\s+", " ", text)
+    text = text.split("\n")[0]
+    words = text.split(" ")
+    if len(words) > MAX_WORDS:
+        text = " ".join(words[:MAX_WORDS]).rstrip(",;:-") + "..."
+    return text
+
+
+def ask(req):
+    trigger = req.get("trigger", "")
+    if trigger not in TRIGGERS:
+        raise ValueError("unknown trigger %r" % trigger)
+    what, examples = TRIGGERS[trigger]
+    user = ("Just now %s.\nYou feel %s. You remember: %s.\n"
+            "Say one line about what just happened. Lines like these fit: %s" % (
+                what, req.get("mood", "?"), describe(req.get("memories", "")),
+                " / ".join(examples)))
+    body = {"messages": [{"role": "system", "content": SYSTEM},
+                         {"role": "user", "content": user}],
+            "max_tokens": 40, "temperature": 0.8}
+    r = urllib.request.urlopen(urllib.request.Request(
+        URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}),
+        timeout=TIMEOUT)
+    return tidy(json.load(r)["choices"][0]["message"]["content"])
+
+
+def main():
+    for raw in sys.stdin:
+        raw = raw.strip()
+        if not raw:
+            continue
+        req = dict(p.split("=", 1) for p in raw.split("\t") if "=" in p)
+        if req.get("trigger") == "hello":
+            print("ready", flush=True)
+            continue
+        t = time.time()
+        try:
+            line = ask(req)
+            print("line=%s" % line, flush=True)
+        except Exception as e:
+            print("error=%s" % str(e).replace("\n", " ")[:200], flush=True)
+        sys.stderr.write("%.1f s %s\n" % (time.time() - t, req.get("trigger")))
+
+
+if __name__ == "__main__":
+    main()

@@ -141,12 +141,12 @@ The mic runs from start to end (it takes about 1 s to start).
 
 **Showing the line:** a speech bubble above Mote for 4 s plus 0.1 s per character, then it fades. A chirp plays when it appears.
 
-**If the mind is slow or offline:** after 4 s, the bubble closes and Mote just smiles. For the goodnight line, it falls asleep anyway. Each trigger also has one fixed fallback line on the device, so the whole script works without onode.
+**If the mind is slow or offline:** after 4 s, the thought bubble gives way to that trigger's fixed fallback line on the device (after 1 s if there is no connection at all), so the whole script works without onode. For the goodnight line, it falls asleep anyway.
 
 ### How it fits together
 
 - **On the N810: `mote.py`** (Python 2.5 + pygame), one loop at about 25 frames a second that draws Mote and polls light and the slide. A thread reads the mic (`gst-launch-0.10 dsppcmsrc ! … ! fdsink fd=3`, with fd 3 sent to the program, because gst-launch prints status lines on stdout; a named pipe with `filesink` delivered nothing) and works out the loudness. Another thread holds **one** open `ssh onode2` connection to the mind.
-- **On onode: `mote-mind`**, a small helper (in the `n810` user's home) started by that SSH connection. It reads one request at a time: a text request, or a recording (8 kHz). For a recording it resamples to 16 kHz, normalizes the volume, sends it to speech recognition (port 8091), strips the `language English<asr_text>` prefix, then asks Gemma E2B (port 8092) and returns one line.
+- **On onode: `mote-mind`**, a small helper (`/usr/local/bin/mote-mind`, like `n810-ask`; copy in [mote/mote-mind](mote/mote-mind)) started by that SSH connection. It reads one request at a time: a text request, or a recording (8 kHz). For a recording it resamples to 16 kHz, normalizes the volume, sends it to speech recognition (port 8091), strips the `language English<asr_text>` prefix, then asks Gemma E2B (port 8092) and returns one line.
 - **Python 2.5 has no `json` module**, so the two sides talk in simple `key=value` lines plus a byte count for audio.
 - **Expected waits:** text line about 2 s; speech reply about 1.3 s + 2 s + sending the audio.
 
@@ -163,6 +163,7 @@ Each step ends with a test Rose can do on the device in a visible terminal, with
 4. **Mic:** baseline, clap startle and hide, chirps, and the 300 ms mute after each chirp.
    **Done 2026-10-28**: see [Step 4 results](#step-4-results-2026-10-28) below.
 5. **Mind, text only:** write `mote-mind` on onode (with Rose's OK), the open SSH connection, the wake and mood lines, the thought bubble, the 4 s timeout and fallback lines.
+   **Done 2026-10-28**: see [Step 5 results](#step-5-results-2026-10-28) below.
 6. **Voice:** listening detection, sending the recording, the reply.
 7. **Rehearse:** run the script 3 times end to end, measure memory and CPU, log the mic and light levels, and retune the thresholds in the demo room.
 
@@ -241,3 +242,31 @@ ssh -t n810 sh /tmp/run-mote.sh show    # no clapping: Mote is startled on cue 3
 - **`show` mode:** Rose watched the hide and peek-out (timid 3 s twice, fond 1.5 s once): "looks good". The startle itself costs 2 trust, so a fond Mote at 8 drops to curious while it hides.
 - **Speed:** 20 frames per second, but the processor went from about 20% to 37% with the mic running, nearly all of it the loudness maths (every other sample is measured). Measuring every 4th sample is the next step if step 5 needs room.
 - **Not yet:** the talk test was quiet speech (Rose was in a classroom), so loud talking against the clap rule is untested. A clap during the 0.3 s after a chirp is ignored.
+
+## Step 5 results (2026-10-28)
+
+Mote now speaks. [mote/mote-mind](mote/mote-mind) runs on onode (installed as `/usr/local/bin/mote-mind` with Rose's OK, root-owned like `n810-ask`; nothing else on onode changed). [mote/mote.py](mote/mote.py) keeps one `ssh onode2 mote-mind` open and shows the lines. Tests from the laptop:
+
+```
+ssh -t n810 sh /tmp/run-mote.sh mind          # the demo script without voice: cover, uncover, pet, clap, door, goodnight
+ssh -t n810 sh /tmp/run-mote.sh show nomind   # no mind: the fallback lines (hands-free)
+```
+
+To update the mind: `scp mote/mote-mind onode:/tmp/` then `ssh onode sudo install -m 755 /tmp/mote-mind /usr/local/bin/`. It needs llamatalk running on onode (`~/llamatalk/start.sh` after a reboot).
+
+- **Protocol:** one tab-separated `key=value` line per request (`trigger`, `mood`, `trust`, `memories` as `what,seconds ago|...`), one `line=...` or `error=...` back. `trigger=hello` answers `ready` without the model. Python 2.5 has no `json`, so no JSON on the N810.
+- **Prompt:** a short Mote persona, then "Just now <what happened>", the mood, the 3 newest memories, and two example lines for that trigger. The first version (examples in the persona) made almost every line about "the big bright" and ignored the event; the second ended most lines with "now". Lines are cut to 12 words and plain ASCII.
+- **Triggers:** wake, mood change (except from a fright or the door, whose own line covers it), peek-out after a fright, door (bright or dim, once the light settles), and goodnight (covered after 20 s or more awake). If a goodnight line doesn't mention night, the N810 adds "Goodnight."
+- **Pacing:** one request at a time; unprompted lines at least 8 s apart (goodnight skips the wait); only the newest wish is sent; a wish older than 8 s is dropped, and a new fright cancels a waiting one (otherwise a peek-out line arrived during the next fright).
+- **Memories now also include** woke up, petted (once per petting session), poked, poked a lot and held.
+- **Final `mind` run** (5th; runs 1 and 4 were missed, so the test now starts with a 6 s "get ready" and the goodnight step lasts 16 s). All five lines came from the mind, 1.7–2.1 s after the request:
+  - wake: *Light comes. I see things you hold.*
+  - curious: *You touch me. I feel warm and happy.*
+  - peek-out: *The big noise made me hide. I peek out to see.*
+  - door (bright): *Bright light is big. I see far out.*
+  - goodnight: *Light goes away. Loud thing scared me. You pet me. Goodnight.*
+- **The keyboard snaps as it slides,** loud enough to count as a clap (1297–1441), 0.0–0.4 s before the switch reads closed. A fright within 0.8 s before the keyboard moves is now undone (trust and memories restored; the yelp still plays), and the mic ignores 0.5 s after it moves. Worked in both runs since.
+- **Connection:** ready 5–6 s after launch (it starts first, alongside the mic and chirps). Each request adds little to the model's ~1.5–2 s.
+- **Bubbles:** a thought cloud with three dots while waiting, then a speech bubble with a tail above Mote for 4 s + 0.1 s per character, with a *say* chirp. Drawn into their own image once and redrawn only where Mote overlaps: drawing them every frame took the processor from about 40% to 48–55% (82% over the outside room). Now 40–51% in the `mind` run, 20 frames per second.
+- **Fallback:** with `nomind`, Mote thinks for 1 s and says the trigger's fixed line ("Is the loud thing gone?").
+- **Not yet:** a mind that is slow but connected (the 4 s timeout) is untested; replies to speech are step 6. Two "claps" came during countdowns in the classroom (601 and 917), probably room noise; one more reason to retune in the demo room (step 7).
